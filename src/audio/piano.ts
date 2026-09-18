@@ -32,7 +32,11 @@ export class Piano {
   private readonly wet: GainNode
   private readonly out: GainNode
   private noise: AudioBuffer | null = null
-  private voices = 0
+  /** End times of notes already scheduled, so the polyphony limit counts notes
+   *  that overlap in the music rather than notes handed over at the same moment.
+   *  A whole phrase is scheduled in one go, so counting on arrival silenced
+   *  everything after the first couple of bars. */
+  private ringing: number[] = []
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx
@@ -87,7 +91,6 @@ export class Piano {
 
   /** Strike one note. `at` and `hold` are in AudioContext seconds. */
   play(midi: number, at: number, hold: number, velocity: number) {
-    if (this.voices > 72) return
     const ctx = this.ctx
     const f = midiHz(midi)
     const v = Math.max(0.03, Math.min(1, velocity))
@@ -95,6 +98,11 @@ export class Piano {
     // A note is damped when it is released, but never abruptly.
     const ring = Math.min(decay, hold + 0.45)
     const end = at + ring + 0.1
+
+    // How many notes are still sounding when this one starts.
+    this.ringing = this.ringing.filter(e => e > at)
+    if (this.ringing.length >= 32) return
+    this.ringing.push(end)
 
     const body = ctx.createGain()
     body.gain.value = 1
@@ -126,8 +134,6 @@ export class Piano {
       osc.connect(g).connect(tone)
       osc.start(at)
       osc.stop(end)
-      this.voices++
-      osc.onended = () => { this.voices-- }
     })
 
     // The damper coming down at the end of the note.

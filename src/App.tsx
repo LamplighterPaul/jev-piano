@@ -131,9 +131,17 @@ export function App() {
           <div className="bars">
             {phrase.spec.bars.map((b, i) => {
               const globalIndex = phrase.barOffset + i
+              const chose = decisions.find(d => d.group === `Bar ${globalIndex + 1}` && d.label === 'Chord')
+              const p = chose?.options.find(o => o.key === chose.picked)?.p ?? 0
               return (
                 <div key={i} className={`bar${bar?.index === globalIndex ? ' now' : ''}`}>
                   <div className="chord">{b.chordLabel}</div>
+                  {chose && (
+                    <div className="conf" title={`Jev gave ${b.chordLabel} ${(p * 100).toFixed(1)}% of its weight across all 36 chords`}>
+                      <span className="track"><span className="fill" style={{ width: `${Math.max(2, p * 100)}%` }} /></span>
+                      <span className="pct">{(p * 100).toFixed(p >= 0.1 ? 0 : 1)}%</span>
+                    </div>
+                  )}
                   <div className="detail">
                     {b.figure.replace(/^w_/, '').replace(/_/g, ' ')}<br />
                     {b.hand.replace(/^w_/, '').replace(/_/g, ' ')}<br />

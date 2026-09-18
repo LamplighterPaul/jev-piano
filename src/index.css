@@ -116,3 +116,8 @@ footer a { color: var(--dim); }
   .bars { grid-template-columns: repeat(2, 1fr); }
   #root { padding: 20px 16px 60px; }
 }
+
+.bar .conf { display: flex; align-items: center; gap: 6px; margin: 4px 0 6px; }
+.bar .conf .track { flex: 1; background: #14110d; border-radius: 3px; height: 6px; overflow: hidden; }
+.bar .conf .fill { display: block; background: var(--key); height: 100%; border-radius: 3px; transition: width 200ms; }
+.bar .conf .pct { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
