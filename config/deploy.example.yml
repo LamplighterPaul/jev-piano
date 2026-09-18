@@ -1,0 +1,37 @@
+# jev-piano behind Cloudflare. Copy to config/deploy.yml and edit.
+#   kamal deploy
+service: jev-piano
+image: jev-piano
+
+servers:
+  web:
+    hosts:
+      - your.server.ip
+
+proxy:
+  host: jev-piano.example.com
+  app_port: 8787
+  forward_headers: true
+  healthcheck:
+    path: /up
+    interval: 3
+    timeout: 5
+
+env:
+  clear:
+    DAILY_USD_CAP: 2   # new calls to Jev stop for the day once this much is spent
+    PER_MINUTE: 40     # requests a minute, per address
+  secret:
+    - TYPESAFE_API_KEY # without it the server serves a clearly labelled random mock
+
+registry:
+  server: your.registry
+  username: you
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+
+ssh:
+  user: root
