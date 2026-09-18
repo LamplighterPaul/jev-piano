@@ -7,3 +7,4 @@ config/deploy.yml
 data
 *.local
 *.tsbuildinfo
+!.env.op.example
