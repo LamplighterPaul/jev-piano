@@ -57,11 +57,11 @@ app.post('/api/piece', async c => {
   try {
     if (!withinRate(c)) return c.json({ error: 'Too many requests in a minute. Give it a moment.' }, 429)
     budget()
-    const { brief } = await c.req.json<{ brief?: string }>()
+    const { brief, seed } = await c.req.json<{ brief?: string; seed?: number }>()
     const text = (brief ?? '').trim().slice(0, MAX_BRIEF)
     if (!text) return c.json({ error: 'Describe something for Jev to play.' }, 400)
     const run = await ask({ brief: text }, buildPieceQuestions())
-    const { piece, decisions, refuse } = assemblePiece(text, run.answers)
+    const { piece, decisions, refuse } = assemblePiece(text, run.answers, Number(seed) || 0)
     return c.json({ piece, decisions, refuse, stats: statsOf(run) })
   } catch (e) { return c.json(fail(e), 500) }
 })

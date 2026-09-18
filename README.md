@@ -65,10 +65,19 @@ Two calls, about 600 ms together, for roughly ten seconds of music.
 
 Jev answers every question in isolation and has no memory, so the whole state goes with each call
 and coherence has to be built rather than assumed. Two things do it. Each bar is asked its own
-question. And for matters of taste, code takes a **sample from Jev's distribution rather than its
-argmax** — the same thing temperature sampling does for a generative model. Where Jev is certain the
-sample is its top answer anyway; where it spreads its weight, the spread is what varies. The music
-never leaves Jev's own probabilities.
+question. And code takes a **sample from Jev's distribution rather than its argmax** — the same
+thing temperature sampling does for a generative model. Where Jev is certain the sample is its top
+answer anyway; where it spreads its weight, the spread is what varies. The music never leaves Jev's
+own probabilities.
+
+That last part matters most for the key. Jev leans on C — it gave C about 41% for one brief — so
+taking the argmax pinned every single piece to C major or C minor. Sampling its tonic distribution,
+flattened with a temperature, gives seven different keys across eight runs of the same brief, while
+the mode, metre and tempo stay put because Jev is genuinely certain about those.
+
+The state also tells Jev, as plain fact, how static the music has been — *"6 of the last 8 bars were
+Cm; 2 different chords in that stretch"*. It is not told what to do about it. Before that, a brief
+like *rain on a window at 3am* produced the same four bars three times over.
 
 ## The catalog
 

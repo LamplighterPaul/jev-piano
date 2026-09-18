@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { MODES, NOTE_NAMES, chordPcs, mod12 } from '../shared/theory.ts'
 import type { BarSpec, Decision, Piece, PhraseSpec, Stats } from '../shared/harness.ts'
 import { Player, type Played } from './audio/player.ts'
@@ -18,7 +18,7 @@ export function App() {
   const [brief, setBrief] = useState('')
   const [piece, setPiece] = useState<Piece | null>(null)
   const [pieceDecisions, setPieceDecisions] = useState<Decision[]>([])
-  const [phrase, setPhrase] = useState<PhraseSpec | null>(null)
+  const [phrase, setPhrase] = useState<{ spec: PhraseSpec; barOffset: number; n: number } | null>(null)
   const [decisions, setDecisions] = useState<Decision[]>([])
   const [bar, setBar] = useState<{ index: number; spec: BarSpec } | null>(null)
   const [lit, setLit] = useState<number[]>([])
@@ -26,7 +26,6 @@ export function App() {
   const [totals, setTotals] = useState({ calls: 0, ms: 0, tokens: 0, usd: 0 })
   const [status, setStatus] = useState<'idle' | 'thinking' | 'playing' | 'done'>('idle')
   const [error, setError] = useState('')
-  const litTimer = useRef(0)
 
   const add = useCallback((s: Stats) => setTotals(t => ({
     calls: t.calls + 1, ms: t.ms + s.ms, tokens: t.tokens + s.inputTokens, usd: t.usd + s.usd,
@@ -35,7 +34,7 @@ export function App() {
   const player = useMemo(() => new Player({
     onPiece(p, d, s) { setPiece(p); setPieceDecisions(d); add(s); setStatus('playing') },
     onPhrase(p: Played) {
-      setPhrase(p.phrase)
+      setPhrase({ spec: p.phrase, barOffset: p.barOffset, n: p.index + 1 })
       setDecisions(p.decisions)
       add(p.stats)
       setLog(l => [...l, {
@@ -46,11 +45,7 @@ export function App() {
       }])
     },
     onBar(index, spec) { setBar({ index, spec }) },
-    onNotes(midis) {
-      setLit(midis)
-      clearTimeout(litTimer.current)
-      litTimer.current = window.setTimeout(() => setLit([]), 320)
-    },
+    onKeys(midis) { setLit(midis) },
     onFinish(reason) { setStatus(reason === 'ended' ? 'done' : 'idle'); setBar(null); setLit([]) },
     onError(message) { setError(message); setStatus('idle') },
   }), [add])
@@ -129,13 +124,13 @@ export function App() {
       {phrase && (
         <div className="panel">
           <h2>
-            Phrase {log.length} — {phrase.role}
-            {phrase.restate && ', bringing the opening back'}
-            {phrase.cadence && ', coming to rest'}
+            Phrase {phrase.n} — {phrase.spec.role}
+            {phrase.spec.restate && ', bringing the opening back'}
+            {phrase.spec.cadence && ', coming to rest'}
           </h2>
           <div className="bars">
-            {phrase.bars.map((b, i) => {
-              const globalIndex = (log.length - 1) * phrase.bars.length + i
+            {phrase.spec.bars.map((b, i) => {
+              const globalIndex = phrase.barOffset + i
               return (
                 <div key={i} className={`bar${bar?.index === globalIndex ? ' now' : ''}`}>
                   <div className="chord">{b.chordLabel}</div>
@@ -251,10 +246,11 @@ function Row({ name, p, width, out, picked }: { name: string; p: number; width: 
   )
 }
 
-/** Three octaves, C3 to C6, lit as the notes sound. */
+/** A1 to C7 — the range the left and right hands actually reach. Keys are held
+ *  down for as long as the note sounds. */
 function Keys({ lit }: { lit: number[] }) {
-  const low = 48
-  const high = 84
+  const low = 33
+  const high = 96
   const whites: number[] = []
   for (let m = low; m <= high; m++) if (![1, 3, 6, 8, 10].includes(mod12(m))) whites.push(m)
   const w = 100 / whites.length

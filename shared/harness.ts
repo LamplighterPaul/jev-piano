@@ -79,22 +79,22 @@ export function buildPieceQuestions(): Questions {
   }
 }
 
-function pick(answers: Answers, id: string, fallback: string): { key: string; decision?: Decision } {
-  const a = answers[id]
-  if (a?.type !== 'choice') return { key: fallback }
-  return { key: a.choice, decision: { id, group: '', label: '', picked: a.choice, options: rank(a.probabilities), confidence: a.confidence } }
-}
-
-function level(answers: Answers, id: string, levels: string[], fallback: number): { index: number; a?: Extract<Answer, { type: 'score' }> } {
-  const a = answers[id]
-  if (a?.type !== 'score') return { index: fallback }
-  return { index: Math.max(0, Math.min(levels.length - 1, Math.round(a.score))), a }
-}
-
 export const rank = (probabilities: Record<string, number>, n = 40) =>
   Object.entries(probabilities).map(([key, p]) => ({ key, p })).sort((a, b) => b.p - a.p).slice(0, n)
 
-export function assemblePiece(brief: string, answers: Answers): { piece: Piece; decisions: Decision[]; refuse?: string } {
+/** Floors for the piece-level decisions. The key is deliberately the loosest:
+ *  Jev spreads real weight over several tonics and taking the argmax every time
+ *  pinned every piece to C. Sampling is still Jev choosing — it is what
+ *  temperature sampling does for a generative model. */
+const KEY_FLOOR = 0.02
+/** Jev leans hard on C. Flattening its tonic distribution spreads the choice
+ *  over the other keys it also thought plausible, without ever leaving them. */
+const KEY_TEMPERATURE = 2.2
+const MODE_FLOOR = 0.05
+const METER_FLOOR = 0.12
+const TEMPO_FLOOR = 0.06
+
+export function assemblePiece(brief: string, answers: Answers, seed = 0): { piece: Piece; decisions: Decision[]; refuse?: string } {
   const music = answers[GUARD_MUSIC]
   const unsafe = answers[GUARD_UNSAFE]
   let refuse: string | undefined
@@ -104,14 +104,14 @@ export function assemblePiece(brief: string, answers: Answers): { piece: Piece; 
   const decisions: Decision[] = []
   const add = (id: string, group: string, label: string, d?: Decision) => { if (d) decisions.push({ ...d, id, group, label }) }
 
-  const t = pick(answers, 'tonic', 'C')
-  const m = pick(answers, 'mode', 'major')
-  const me = pick(answers, 'meter', '4/4')
+  const t = sampled(answers, 'tonic', 'C', seed, KEY_FLOOR, KEY_TEMPERATURE)
+  const m = sampled(answers, 'mode', 'major', seed, MODE_FLOOR)
+  const me = sampled(answers, 'meter', '4/4', seed, METER_FLOOR)
   add('tonic', 'Piece', 'Home note', t.decision)
   add('mode', 'Piece', 'Scale', m.decision)
   add('meter', 'Piece', 'Beats in a bar', me.decision)
 
-  const tempo = level(answers, 'tempo', TEMPO_LEVELS, 2)
+  const tempo = sampledLevel(answers, 'tempo', TEMPO_LEVELS, 2, seed, TEMPO_FLOOR)
   if (tempo.a) decisions.push({
     id: 'tempo', group: 'Piece', label: 'Tempo', picked: `${TEMPO_BPM[tempo.index]} bpm`,
     options: rank(tempo.a.probabilities).map(o => ({ key: `${TEMPO_BPM[Number(o.key)] ?? o.key}`, p: o.p })), confidence: tempo.a.confidence,
@@ -187,9 +187,17 @@ function noise(seed: number, id: string): number {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296
 }
 
-/** Sample one option from Jev's distribution, ignoring the long tail. */
-function sample(probabilities: Record<string, number>, seed: number, id: string, floor: number): string {
-  const viable = Object.entries(probabilities).filter(([, p]) => p >= floor).sort((a, b) => b[1] - a[1])
+/**
+ * Sample one option from Jev's distribution, ignoring the long tail.
+ * `temperature` below 1 sharpens the distribution and above 1 flattens it,
+ * exactly as it does for a generative model. Every option sampled is still one
+ * Jev put real weight on.
+ */
+function sample(probabilities: Record<string, number>, seed: number, id: string, floor: number, temperature = 1): string {
+  const viable = Object.entries(probabilities)
+    .filter(([, p]) => p >= floor)
+    .map(([k, p]) => [k, temperature === 1 ? p : Math.pow(p, 1 / temperature)] as const)
+    .sort((a, b) => b[1] - a[1])
   if (viable.length <= 1) return viable[0]?.[0] ?? Object.keys(probabilities)[0]
   const total = viable.reduce((n, [, p]) => n + p, 0)
   let r = noise(seed, id) * total
@@ -200,18 +208,32 @@ function sample(probabilities: Record<string, number>, seed: number, id: string,
 const CHORD_FLOOR = 0.08  // harmony is a decision of fact: only real alternatives count
 const TASTE_FLOOR = 0.03  // shape, weight and register are matters of taste
 
-function sampled(answers: Answers, id: string, fallback: string, seed: number, floor: number): { key: string; decision?: Decision } {
+function sampled(answers: Answers, id: string, fallback: string, seed: number, floor: number, temperature = 1): { key: string; decision?: Decision } {
   const a = answers[id]
   if (a?.type !== 'choice') return { key: fallback }
-  const key = seed ? sample(a.probabilities, seed, id, floor) : a.choice
+  const key = seed ? sample(a.probabilities, seed, id, floor, temperature) : a.choice
   return { key, decision: { id, group: '', label: '', picked: key, options: rank(a.probabilities), confidence: a.confidence } }
 }
 
-function sampledLevel(answers: Answers, id: string, levels: string[], fallback: number, seed: number) {
+function sampledLevel(answers: Answers, id: string, levels: string[], fallback: number, seed: number, floor = TASTE_FLOOR) {
   const a = answers[id]
   if (a?.type !== 'score') return { index: fallback, a: undefined }
-  const key = seed ? sample(a.probabilities, seed, id, TASTE_FLOOR) : String(Math.round(a.score))
+  const key = seed ? sample(a.probabilities, seed, id, floor) : String(Math.round(a.score))
   return { index: Math.max(0, Math.min(levels.length - 1, Number(key))), a }
+}
+
+/** How much the music has been standing still, as plain fact. Jev decides what
+ *  to do about it; code does not push it anywhere. */
+function stasis(ctx: Context) {
+  const recent = ctx.progression.slice(-8)
+  if (recent.length < 4) return {}
+  const commonest = recent.reduce((best, c) =>
+    (recent.filter(x => x === c).length > recent.filter(x => x === best).length ? c : best), recent[0])
+  const n = recent.filter(c => c === commonest).length
+  const distinct = new Set(recent).size
+  return {
+    recent_harmony: `${n} of the last ${recent.length} bars were ${commonest}; ${distinct} different chords in that stretch`,
+  }
 }
 
 /** Jev has no memory, so this is everything it knows about the piece so far. */
@@ -225,6 +247,7 @@ export function phraseState(piece: Piece, ctx: Context, chords?: string[]) {
     phrase_number: ctx.index + 1,
     bars_played_so_far: ctx.barsPlayed,
     chords_played_so_far: ctx.progression.slice(-12).join(' ') || 'none yet, this is the opening',
+    ...stasis(ctx),
     opening_figure: ctx.motif ?? 'none yet, this is the opening',
     this_phrase_should: ctx.role ? PHRASE_FUNCTIONS[ctx.role as keyof typeof PHRASE_FUNCTIONS] ?? ctx.role : 'set out the opening idea',
     ...(chords ? { chords_chosen_for_this_phrase: chords.join(' ') } : {}),

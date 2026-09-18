@@ -6,13 +6,14 @@ import { renderPhrase, type Note, type RenderState } from '../../shared/render.t
 import type { BarSpec, Context, Decision, Piece, PhraseSpec, Stats } from '../../shared/harness.ts'
 import { Piano } from './piano.ts'
 
-export interface Played { phrase: PhraseSpec; decisions: Decision[]; stats: Stats; index: number }
+export interface Played { phrase: PhraseSpec; decisions: Decision[]; stats: Stats; index: number; barOffset: number }
 
 export interface Hooks {
   onPiece(piece: Piece, decisions: Decision[], stats: Stats): void
   onPhrase(p: Played): void
   onBar(globalBar: number, bar: BarSpec, phrase: PhraseSpec): void
-  onNotes(midi: number[]): void
+  /** Every key currently sounding, so the drawn keyboard matches the ear. */
+  onKeys(midi: number[]): void
   onFinish(reason: 'ended' | 'stopped'): void
   onError(message: string): void
 }
@@ -27,6 +28,7 @@ export class Player {
   private stopped = true
   private nextStart = 0
   private render: RenderState = { lastVoicing: [] }
+  private down = new Map<number, number>()
 
   private readonly hooks: Hooks
 
@@ -38,6 +40,7 @@ export class Player {
     this.stop('stopped')
     this.stopped = false
     this.render = { lastVoicing: [] }
+    this.down.clear()
 
     const ctx = this.ctx ?? new AudioContext()
     this.ctx = ctx
@@ -46,7 +49,7 @@ export class Player {
 
     let piece: Piece
     try {
-      const res = await post<{ piece: Piece; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief })
+      const res = await post<{ piece: Piece; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
       if (res.error) return this.fail(res.error)
       if (res.refuse) return this.fail(res.refuse)
       piece = res.piece
@@ -66,7 +69,7 @@ export class Player {
       try {
         const res = await post<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>('/api/phrase', { piece, context })
         if (res.error) return this.fail(res.error)
-        played = { ...res, index: context.index }
+        played = { ...res, index: context.index, barOffset: context.barsPlayed }
       } catch (e) {
         return this.fail(e instanceof Error ? e.message : 'Could not reach Jev.')
       }
@@ -76,7 +79,9 @@ export class Player {
       // If a slow call ate the buffer, pick up from now rather than in the past.
       this.nextStart = Math.max(this.nextStart, ctxNow() + 0.15)
       const start = this.nextStart
-      this.hooks.onPhrase(played)
+      // A phrase is fetched seconds before it is heard. Show it when it sounds,
+      // not when it arrives, or the screen runs ahead of the music.
+      this.after(start, () => this.hooks.onPhrase(played))
       this.schedule(renderPhrase(piece, phrase, this.render), start, beat, piece.beats, context.barsPlayed, phrase)
 
       const length = phrase.bars.length * piece.beats * beat
@@ -104,21 +109,24 @@ export class Player {
       piano.play(n.midi, start + n.at * beat, Math.max(0.05, n.beats * beat * 0.92), n.velocity)
     }
 
-    // Light the keys up in step with the sound: one callback per onset, not per note.
-    const onsets = new Map<number, number[]>()
+    // A key is drawn down for exactly as long as it is held, so the keyboard
+    // shows what is sounding rather than a fixed flash per onset.
     for (const n of notes) {
-      const key = Math.round(n.at * 1000)
-      const group = onsets.get(key)
-      if (group) group.push(n.midi)
-      else onsets.set(key, [n.midi])
-    }
-    for (const [key, midis] of onsets) {
-      this.after(start + (key / 1000) * beat, () => this.hooks.onNotes(midis))
+      this.after(start + n.at * beat, () => this.press(n.midi, 1))
+      this.after(start + (n.at + n.beats) * beat, () => this.press(n.midi, -1))
     }
 
     phrase.bars.forEach((bar, b) => {
       this.after(start + b * beatsPerBar * beat, () => this.hooks.onBar(barOffset + b, bar, phrase))
     })
+  }
+
+  /** Reference counted, because the same key can be struck by both hands. */
+  private press(midi: number, delta: number) {
+    const n = (this.down.get(midi) ?? 0) + delta
+    if (n > 0) this.down.set(midi, n)
+    else this.down.delete(midi)
+    this.hooks.onKeys([...this.down.keys()])
   }
 
   private after(audioTime: number, fn: () => void) {
@@ -144,6 +152,7 @@ export class Player {
     this.stopped = true
     for (const t of this.timers) clearTimeout(t)
     this.timers = []
+    if (this.down.size) { this.down.clear(); this.hooks.onKeys([]) }
     if (this.ctx) { void this.ctx.close(); this.ctx = null; this.piano = null }
     if (was) this.hooks.onFinish(reason)
   }
