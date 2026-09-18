@@ -5,10 +5,29 @@ with probabilities and nothing else. So this hands it a piano and asks it questi
 
 Describe a mood — *a slow, sad waltz* — and it plays, continuously, deciding as it goes.
 
+**Live at [jev-piano.zammitpaul.com](https://jev-piano.zammitpaul.com).**
+
+## An X collaboration
+
+This started on X. [@BaselAshraf81](https://x.com/BaselAshraf81) tried to make Jev play the piano,
+found that it would not, and put five dollars on whoever could.
+[@LamplighterPaul](https://x.com/LamplighterPaul) reckoned that given some music theory it would
+find the next chord quite happily. So we are building it together.
+
+We think it is possible. We are trying.
+
+- **Basel** — the interface.
+- **Paul** — the algorithm, and making what you hear match what Jev chose.
+
+## Run it
+
 ```sh
 npm ci && npm run build
 TYPESAFE_API_KEY=... npm start        # http://localhost:8787
 ```
+
+`TYPESAFE_API_KEYS` takes a comma-separated list instead, and calls are spread across them,
+falling through to the next one when a key is rate limited.
 
 ## Why "it cannot play piano" was the wrong test
 

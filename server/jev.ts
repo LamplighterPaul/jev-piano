@@ -4,27 +4,34 @@ import type { Answer, Answers, Questions } from '../shared/harness.ts'
 
 export interface Run { answers: Answers; model: string; ms: number; questions: number; inputTokens: number }
 
-const KEY = process.env.TYPESAFE_API_KEY?.trim()
+/** One key, or several in TYPESAFE_API_KEYS to spread the calls over. */
+const KEYS = (process.env.TYPESAFE_API_KEYS ?? process.env.TYPESAFE_API_KEY ?? '')
+  .split(',').map(k => k.trim()).filter(Boolean)
 const MODEL = process.env.TYPESAFE_MODEL ?? 'jev-latest'
 const ENDPOINT = process.env.TYPESAFE_ENDPOINT ?? 'https://api.typesafe.ai/v1/systemone'
 
-export const live = () => Boolean(KEY)
+let turn = 0
+
+export const live = () => KEYS.length > 0
+export const keyCount = () => KEYS.length
 
 export async function ask(state: unknown, questions: Questions): Promise<Run> {
-  return KEY ? jev(state, questions) : mock(questions)
+  return KEYS.length ? jev(state, questions) : mock(questions)
 }
 
 async function jev(state: unknown, questions: Questions): Promise<Run> {
   const started = performance.now()
   for (let attempt = 0; ; attempt++) {
+    // Round robin, and a rate limited key steps aside for the next one.
+    const key = KEYS[(turn++ + attempt) % KEYS.length]
     const res = await fetch(ENDPOINT, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ state, model: MODEL, questions }),
       signal: AbortSignal.timeout(20_000),
     })
-    if ((res.status === 429 || res.status === 529) && attempt < 2) {
-      await new Promise(r => setTimeout(r, 400 * 2 ** attempt))
+    if ((res.status === 429 || res.status === 529) && attempt < KEYS.length + 1) {
+      await new Promise(r => setTimeout(r, attempt < KEYS.length ? 0 : 400 * 2 ** attempt))
       continue
     }
     if (!res.ok) throw new Error(`Jev returned ${res.status}: ${(await res.text()).slice(0, 300)}`)

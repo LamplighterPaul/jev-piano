@@ -7,7 +7,7 @@ import {
   type Context, type Piece, type Stats,
 } from '../shared/harness.ts'
 import { chordLabel } from '../shared/theory.ts'
-import { ask, live } from './jev.ts'
+import { ask, keyCount, live } from './jev.ts'
 
 const app = new Hono()
 const PORT = Number(process.env.PORT ?? 8787)
@@ -51,7 +51,7 @@ function withinRate(c: { req: { header(name: string): string | undefined } }): b
 }
 
 app.get('/up', c => c.text('ok'))
-app.get('/api/health', c => c.json({ ok: true, jev: live(), calls, spent: Number(spent.toFixed(5)) }))
+app.get('/api/health', c => c.json({ ok: true, jev: live(), keys: keyCount(), calls, spent: Number(spent.toFixed(5)) }))
 
 app.post('/api/piece', async c => {
   try {

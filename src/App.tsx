@@ -220,7 +220,10 @@ export function App() {
         twelve roots — major, minor and dominant seventh — with no key filtering anywhere in the
         code, so staying in key is Jev's doing, not the harness's.
         <br />
-        An experiment by <a href="https://zammitpaul.com/about">Paul Zammit</a>. Not affiliated with TypeSafe AI.
+        An X collaboration between <a href="https://x.com/BaselAshraf81">@BaselAshraf81</a> and{' '}
+        <a href="https://x.com/LamplighterPaul">@LamplighterPaul</a>, who think this is possible and
+        are trying. <a href="https://github.com/LamplighterPaul/jev-piano">Source</a>, MIT.
+        Not affiliated with TypeSafe AI.
       </footer>
     </>
   )
