@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+.env.*
+config/deploy.yml
+.kamal/secrets*
+data
+*.local

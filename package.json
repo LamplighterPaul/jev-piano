@@ -1,0 +1,30 @@
+{
+  "name": "jev-piano",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A decision model that cannot generate a single note improvises at the piano, by choosing.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "start": "node server/index.ts",
+    "check": "tsc -b",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.8",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

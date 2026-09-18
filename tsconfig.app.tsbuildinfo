@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/audio/piano.ts","./src/audio/player.ts","./shared/catalog.ts","./shared/harness.ts","./shared/render.ts","./shared/theory.ts"],"version":"6.0.3"}
