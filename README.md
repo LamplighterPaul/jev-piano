@@ -23,8 +23,9 @@ npm ci && npm run build
 TYPESAFE_API_KEY=... npm start        # http://localhost:8787
 ```
 
-`TYPESAFE_API_KEYS` takes a comma-separated list instead, and calls are spread across them,
-falling through to the next one when a key is rate limited.
+Add `TYPESAFE_API_KEY_2` (and `_3`, `_4`…) to rotate over several keys: calls go round robin, and a
+key that comes back rate limited stands aside for the next one. `TYPESAFE_API_KEYS` also takes a
+comma-separated list. `GET /api/health` reports how many it found.
 
 ## Why "it cannot play piano" was the wrong test
 

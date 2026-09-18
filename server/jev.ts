@@ -4,9 +4,22 @@ import type { Answer, Answers, Questions } from '../shared/harness.ts'
 
 export interface Run { answers: Answers; model: string; ms: number; questions: number; inputTokens: number }
 
-/** One key, or several in TYPESAFE_API_KEYS to spread the calls over. */
-const KEYS = (process.env.TYPESAFE_API_KEYS ?? process.env.TYPESAFE_API_KEY ?? '')
-  .split(',').map(k => k.trim()).filter(Boolean)
+/**
+ * Every key we have, gathered from TYPESAFE_API_KEYS (comma separated),
+ * TYPESAFE_API_KEY, and TYPESAFE_API_KEY_2, _3 and so on. The numbered form
+ * exists because a secret manager hands over one reference per variable and
+ * cannot build a comma separated list for us.
+ */
+function collectKeys(): string[] {
+  const found = [
+    ...(process.env.TYPESAFE_API_KEYS ?? '').split(','),
+    process.env.TYPESAFE_API_KEY ?? '',
+  ]
+  for (let n = 2; n <= 9; n++) found.push(process.env[`TYPESAFE_API_KEY_${n}`] ?? '')
+  return [...new Set(found.map(k => k.trim()).filter(Boolean))]
+}
+
+const KEYS = collectKeys()
 const MODEL = process.env.TYPESAFE_MODEL ?? 'jev-latest'
 const ENDPOINT = process.env.TYPESAFE_ENDPOINT ?? 'https://api.typesafe.ai/v1/systemone'
 

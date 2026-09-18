@@ -22,7 +22,7 @@ env:
     DAILY_USD_CAP: 2   # new calls to Jev stop for the day once this much is spent
     PER_MINUTE: 40     # requests a minute, per address
   secret:
-    - TYPESAFE_API_KEY  # or TYPESAFE_API_KEYS, comma separated, to rotate over several
+    - TYPESAFE_API_KEY    # add TYPESAFE_API_KEY_2, _3 ... to rotate over several
 
 registry:
   server: your.registry
