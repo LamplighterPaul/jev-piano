@@ -6,3 +6,4 @@ config/deploy.yml
 .kamal/secrets*
 data
 *.local
+*.tsbuildinfo
