@@ -16,9 +16,6 @@ find the next chord quite happily. So we are building it together.
 
 We think it is possible. We are trying.
 
-- **Basel** — the interface.
-- **Paul** — the algorithm, and making what you hear match what Jev chose.
-
 ## Run it
 
 ```sh
