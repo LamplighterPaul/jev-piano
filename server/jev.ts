@@ -32,9 +32,15 @@ export async function ask(state: unknown, questions: Questions): Promise<Run> {
   return KEYS.length ? jev(state, questions) : mock(questions)
 }
 
+// One pass round robin through every key, then up to two backed-off retries on
+// top, so a fully rate-limited pool fails in bounded time instead of doubling
+// its wait forever.
+const MAX_EXTRA_RETRIES = 2
+
 async function jev(state: unknown, questions: Questions): Promise<Run> {
   const started = performance.now()
-  for (let attempt = 0; ; attempt++) {
+  let lastFailure: Response | undefined
+  for (let attempt = 0; attempt < KEYS.length + MAX_EXTRA_RETRIES; attempt++) {
     // Round robin, and a rate limited key steps aside for the next one.
     const key = KEYS[(turn++ + attempt) % KEYS.length]
     const res = await fetch(ENDPOINT, {
@@ -43,8 +49,11 @@ async function jev(state: unknown, questions: Questions): Promise<Run> {
       body: JSON.stringify({ state, model: MODEL, questions }),
       signal: AbortSignal.timeout(20_000),
     })
-    if ((res.status === 429 || res.status === 529) && attempt < KEYS.length + 1) {
-      await new Promise(r => setTimeout(r, attempt < KEYS.length ? 0 : 400 * 2 ** attempt))
+    if (res.status === 429 || res.status === 529) {
+      lastFailure = res
+      // Cycling to a fresh key needs no delay; only a retry on an already-seen
+      // key backs off, and the backoff is capped by MAX_EXTRA_RETRIES above.
+      if (attempt >= KEYS.length) await new Promise(r => setTimeout(r, 400 * 2 ** (attempt - KEYS.length)))
       continue
     }
     if (!res.ok) throw new Error(`Jev returned ${res.status}: ${(await res.text()).slice(0, 300)}`)
@@ -54,6 +63,8 @@ async function jev(state: unknown, questions: Questions): Promise<Run> {
       questions: Object.keys(questions).length, inputTokens: body.usage?.input_tokens ?? 0,
     }
   }
+  const status = lastFailure?.status ?? 429
+  throw new Error(`Jev returned ${status}: every key is rate limited right now`)
 }
 
 // Offline stand-in so the audio and the interface can be worked on without a

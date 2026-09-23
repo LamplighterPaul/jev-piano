@@ -24,8 +24,12 @@ const LOOKAHEAD = 4
 export class Player {
   private ctx: AudioContext | null = null
   private piano: Piano | null = null
-  private timers: number[] = []
+  private timers = new Set<number>()
   private stopped = true
+  /** Bumped on every start, so a run that is already in flight can tell that it
+   *  has been superseded. `stopped` alone cannot: the new run clears it, and the
+   *  old loop then reads it as permission to carry on scheduling. */
+  private generation = 0
   private nextStart = 0
   private render: RenderState = { lastVoicing: [] }
   private down = new Map<number, number>()
@@ -38,6 +42,8 @@ export class Player {
 
   async start(brief: string, seed: number) {
     this.stop('stopped')
+    const run = ++this.generation
+    const current = () => !this.stopped && run === this.generation
     this.stopped = false
     this.render = { lastVoicing: [] }
     this.down.clear()
@@ -52,6 +58,7 @@ export class Player {
       const res = await post<{ piece: Piece; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
       if (res.error) return this.fail(res.error)
       if (res.refuse) return this.fail(res.refuse)
+      if (!current()) return
       piece = res.piece
       this.hooks.onPiece(piece, res.decisions, res.stats)
     } catch (e) {
@@ -64,7 +71,7 @@ export class Player {
 
     const context: Context = { index: 0, progression: [], barsPlayed: 0, seed }
 
-    while (!this.stopped) {
+    while (current()) {
       let played: Played
       try {
         const res = await post<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>('/api/phrase', { piece, context })
@@ -73,7 +80,7 @@ export class Player {
       } catch (e) {
         return this.fail(e instanceof Error ? e.message : 'Could not reach Jev.')
       }
-      if (this.stopped) return
+      if (!current()) return
 
       const { phrase } = played
       // If a slow call ate the buffer, pick up from now rather than in the past.
@@ -94,7 +101,11 @@ export class Player {
       context.role = phrase.next
 
       if (phrase.end) {
-        this.after(this.nextStart + 1.6, () => { this.stopped = true; this.hooks.onFinish('ended') })
+        this.after(this.nextStart + 1.6, () => {
+          if (run !== this.generation) return
+          this.stopped = true
+          this.hooks.onFinish('ended')
+        })
         return
       }
       await this.sleepUntil(this.nextStart - LOOKAHEAD)
@@ -129,31 +140,44 @@ export class Player {
     this.hooks.onKeys([...this.down.keys()])
   }
 
+  /** Every timer forgets itself once it has fired. A long piece schedules two
+   *  per note, and a list that only grew held every one of them for the run. */
   private after(audioTime: number, fn: () => void) {
     const ctx = this.ctx
     if (!ctx) return
     const ms = Math.max(0, (audioTime - ctx.currentTime) * 1000)
-    this.timers.push(window.setTimeout(fn, ms))
+    const id = window.setTimeout(() => { this.timers.delete(id); fn() }, ms)
+    this.timers.add(id)
   }
 
   private sleepUntil(audioTime: number) {
     const ctx = this.ctx
     const ms = ctx ? Math.max(0, (audioTime - ctx.currentTime) * 1000) : 0
-    return new Promise<void>(resolve => { this.timers.push(window.setTimeout(resolve, ms)) })
+    return new Promise<void>(resolve => {
+      const id = window.setTimeout(() => { this.timers.delete(id); resolve() }, ms)
+      this.timers.add(id)
+    })
   }
 
+  /** A failed run has to let go of the clock and the instrument too, or its
+   *  timers keep firing into a piece that is no longer playing. */
   private fail(message: string) {
     this.stopped = true
+    this.release()
     this.hooks.onError(message)
+  }
+
+  private release() {
+    for (const t of this.timers) clearTimeout(t)
+    this.timers.clear()
+    if (this.down.size) { this.down.clear(); this.hooks.onKeys([]) }
+    if (this.ctx) { void this.ctx.close(); this.ctx = null; this.piano = null }
   }
 
   stop(reason: 'ended' | 'stopped' = 'stopped') {
     const was = !this.stopped
     this.stopped = true
-    for (const t of this.timers) clearTimeout(t)
-    this.timers = []
-    if (this.down.size) { this.down.clear(); this.hooks.onKeys([]) }
-    if (this.ctx) { void this.ctx.close(); this.ctx = null; this.piano = null }
+    this.release()
     if (was) this.hooks.onFinish(reason)
   }
 }
