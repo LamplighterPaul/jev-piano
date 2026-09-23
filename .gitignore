@@ -8,3 +8,4 @@ data
 *.local
 *.tsbuildinfo
 !.env.op.example
+.kiro
