@@ -9,3 +9,4 @@ data
 *.tsbuildinfo
 !.env.op.example
 .kiro
+PRODUCT.md
