@@ -24,16 +24,38 @@ const MAX_VOICES = 32
  *  is being returned properly. */
 const DEBUG = typeof window !== 'undefined' && window.localStorage?.getItem('jevPianoDebug') === '1'
 
+/** The room, kept between pieces. Pressing play builds a fresh Piano, and
+ *  working the impulse out again each time blocked the click for over half a
+ *  second: a hundred and fifty thousand samples, each with its own pow and exp. */
+type Samples = Float32Array<ArrayBuffer>
+let roomCache: { rate: number; n: number; left: Samples; right: Samples } | null = null
+
 function room(ctx: AudioContext, seconds = 1.6): AudioBuffer {
-  const n = Math.floor(ctx.sampleRate * seconds)
-  const buffer = ctx.createBuffer(2, n, ctx.sampleRate)
-  for (let c = 0; c < 2; c++) {
-    const data = buffer.getChannelData(c)
-    for (let i = 0; i < n; i++) {
-      const t = i / n
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 2.6) * (1 - Math.exp(-i / 400))
+  const rate = ctx.sampleRate
+  const n = Math.floor(rate * seconds)
+
+  if (!roomCache || roomCache.rate !== rate || roomCache.n !== n) {
+    // The decay curve needs a pow, but it does not need one per sample: a small
+    // table of it, read by index, is indistinguishable and far cheaper.
+    const steps = 2048
+    const curve = new Float32Array(steps)
+    for (let k = 0; k < steps; k++) curve[k] = Math.pow(1 - k / steps, 2.6)
+
+    const channel = (): Samples => {
+      const data = new Float32Array(new ArrayBuffer(n * 4))
+      for (let i = 0; i < n; i++) {
+        // The exp only bends the first few thousand samples; past that it is 1.
+        const attack = i < 4000 ? 1 - Math.exp(-i / 400) : 1
+        data[i] = (Math.random() * 2 - 1) * curve[((i * steps) / n) | 0] * attack
+      }
+      return data
     }
+    roomCache = { rate, n, left: channel(), right: channel() }
   }
+
+  const buffer = ctx.createBuffer(2, n, rate)
+  buffer.copyToChannel(roomCache.left, 0)
+  buffer.copyToChannel(roomCache.right, 1)
   return buffer
 }
 
