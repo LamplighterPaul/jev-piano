@@ -114,7 +114,9 @@ export function assemblePiece(brief: string, answers: Answers, seed = 0): { piec
   const tempo = sampledLevel(answers, 'tempo', TEMPO_LEVELS, 2, seed, TEMPO_FLOOR)
   if (tempo.a) decisions.push({
     id: 'tempo', group: 'Piece', label: 'Tempo', picked: `${TEMPO_BPM[tempo.index]} bpm`,
-    options: rank(tempo.a.probabilities).map(o => ({ key: `${TEMPO_BPM[Number(o.key)] ?? o.key}`, p: o.p })), confidence: tempo.a.confidence,
+    // The unit belongs on the options too: `picked` has to be one of the keys,
+    // or nothing downstream can tell which option was the chosen one.
+    options: rank(tempo.a.probabilities).map(o => ({ key: `${TEMPO_BPM[Number(o.key)] ?? o.key} bpm`, p: o.p })), confidence: tempo.a.confidence,
   })
 
   const tonic = Math.max(0, NOTE_NAMES.indexOf(t.key as (typeof NOTE_NAMES)[number]))

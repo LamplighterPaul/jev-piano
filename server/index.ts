@@ -6,7 +6,8 @@ import {
   buildHarmonyQuestions, buildMelodyQuestions, buildPieceQuestions, phraseState,
   type Context, type Piece, type Stats,
 } from '../shared/harness.ts'
-import { chordLabel } from '../shared/theory.ts'
+import { FIGURES, PHRASE_FUNCTIONS } from '../shared/catalog.ts'
+import { CHORD_BY_LABEL, chordLabel } from '../shared/theory.ts'
 import { ask, keyCount, live } from './jev.ts'
 
 const app = new Hono()
@@ -72,11 +73,24 @@ app.post('/api/phrase', async c => {
     budget()
     const { piece, context } = await c.req.json<{ piece: Piece; context: Context }>()
     if (!piece?.brief) return c.json({ error: 'No piece in progress.' }, 400)
+    // Everything here reaches Jev as the text of a prompt, and the client can
+    // say anything, so each field is checked against the catalog it came from.
     const ctx: Context = {
       index: Math.max(0, context?.index ?? 0),
-      progression: Array.isArray(context?.progression) ? context.progression.slice(-12) : [],
-      motif: context?.motif,
+      progression: Array.isArray(context?.progression)
+        ? context.progression.filter(label => typeof label === 'string' && label in CHORD_BY_LABEL).slice(-12)
+        : [],
+      motif: FIGURES.some(f => f.id === context?.motif) ? context.motif : undefined,
       barsPlayed: Math.max(0, context?.barsPlayed ?? 0),
+      // Without the seed, sampled() falls back to Jev's argmax for every
+      // chord, figure, hand, landing note, dynamic and register, so a piece
+      // never varies once the key is chosen.
+      seed: Math.max(0, Math.trunc(Number(context?.seed) || 0)),
+      // Without the role, every phrase is told it is the opening, so nothing
+      // plans ahead and the harmony settles onto the tonic and stays there.
+      role: typeof context?.role === 'string' && context.role in PHRASE_FUNCTIONS
+        ? context.role
+        : undefined,
     }
     // Pass one: the harmony and the shape of the phrase.
     const first = await ask(phraseState(piece, ctx), buildHarmonyQuestions(ctx))
