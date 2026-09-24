@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { MODES, NOTE_NAMES, chordPcs, mod12 } from '../shared/theory.ts'
 import type { BarSpec, Decision, Piece, PhraseSpec, Stats } from '../shared/harness.ts'
 import { Player, type Played } from './audio/player.ts'
@@ -21,11 +21,14 @@ export function App() {
   const [phrase, setPhrase] = useState<{ spec: PhraseSpec; barOffset: number; n: number } | null>(null)
   const [decisions, setDecisions] = useState<Decision[]>([])
   const [bar, setBar] = useState<{ index: number; spec: BarSpec } | null>(null)
-  const [lit, setLit] = useState<number[]>([])
+  const [sounding, setSounding] = useState<number[]>([])
   const [log, setLog] = useState<Line[]>([])
   const [totals, setTotals] = useState({ calls: 0, ms: 0, tokens: 0, usd: 0 })
   const [status, setStatus] = useState<'idle' | 'thinking' | 'playing' | 'done'>('idle')
   const [error, setError] = useState('')
+
+  const keyboard = useRef<KeyboardHandle>(null)
+  const lastSpoken = useRef(0)
 
   const add = useCallback((s: Stats) => setTotals(t => ({
     calls: t.calls + 1, ms: t.ms + s.ms, tokens: t.tokens + s.inputTokens, usd: t.usd + s.usd,
@@ -45,8 +48,21 @@ export function App() {
       }])
     },
     onBar(index, spec) { setBar({ index, spec }) },
-    onKeys(midis) { setLit(midis) },
-    onFinish(reason) { setStatus(reason === 'ended' ? 'done' : 'idle'); setBar(null); setLit([]) },
+    onKeys(midis) {
+      // The keyboard is the one thing that changes many times a second, so it
+      // is driven straight through the DOM. Routing it through React state
+      // re-rendered all eighty-eight keys on every note.
+      keyboard.current?.setLit(midis)
+      // The spoken equivalent only needs to be current, not instant.
+      const now = performance.now()
+      if (now - lastSpoken.current > 500) { lastSpoken.current = now; setSounding(midis) }
+    },
+    onFinish(reason) {
+      setStatus(reason === 'ended' ? 'done' : 'idle')
+      setBar(null)
+      keyboard.current?.setLit([])
+      setSounding([])
+    },
     onError(message) { setError(message); setStatus('idle') },
   }), [add])
 
@@ -55,7 +71,7 @@ export function App() {
     if (!t) return
     setBrief(t)
     setError(''); setPiece(null); setPhrase(null); setDecisions([]); setPieceDecisions([])
-    setBar(null); setLog([]); setLit([]); setTotals({ calls: 0, ms: 0, tokens: 0, usd: 0 })
+    setBar(null); setLog([]); setSounding([]); setTotals({ calls: 0, ms: 0, tokens: 0, usd: 0 })
     setStatus('thinking')
     void player.start(t, Math.floor(Math.random() * 1e9) + 1)
   }
@@ -76,18 +92,17 @@ export function App() {
 
   const busy = status === 'thinking' || status === 'playing'
 
-  const nowPlayingText = useMemo(() => {
-    if (!lit.length) return 'No notes sounding'
-    const names = [...lit].toSorted((a, b) => a - b).map(m => `${NOTE_NAMES[mod12(m)]}${Math.floor(m / 12) - 1}`)
-    return `Now sounding: ${names.join(', ')}`
-  }, [lit])
+  const spokenNotes = useMemo(() => {
+    if (!sounding.length) return 'No notes sounding'
+    return `Now sounding: ${sounding.map(m => `${NOTE_NAMES[mod12(m)]}${Math.floor(m / 12) - 1}`).join(', ')}`
+  }, [sounding])
 
   return (
     <>
       <h1>Jev at the piano</h1>
       <p className="lede">
-        Jev can't generate notes. It only answers multiple-choice questions. This app asks it
-        which chord, which shape, which key — one decision at a time — and plays what it picks.
+        Jev can't generate notes. It only answers multiple-choice questions. Every option it
+        was offered stays visible here, dim — the one it struck is the one you hear.
       </p>
 
       <div className="controls">
@@ -103,81 +118,78 @@ export function App() {
         </label>
         {busy
           ? <button className="stop" onClick={() => player.stop()}>Stop</button>
-          : <button onClick={() => go(brief)} disabled={!brief.trim()}>Play</button>}
+          : <button className="go" onClick={() => go(brief)} disabled={!brief.trim()}>Play</button>}
       </div>
 
       <div className="presets">
-        {SUGGESTIONS.map(s => <button key={s} className="ghost" onClick={() => go(s)} disabled={busy}>{s}</button>)}
+        {SUGGESTIONS.map(s => <button key={s} onClick={() => go(s)} disabled={busy}>{s}</button>)}
       </div>
 
       {error && <p className="error" role="alert">{error}</p>}
 
-      <div className="instrument">
-        <div className="now-playing">
+      <div className="stage">
+        <div className="readout">
           {piece
-            ? <span className="key-name">{NOTE_NAMES[piece.tonic]} {piece.mode.replace('_', ' ')}</span>
-            : <span className="key-name">Ready</span>}
+            ? <span className="home">{NOTE_NAMES[piece.tonic]} {piece.mode.replace('_', ' ')}</span>
+            : <span className="home unset">no key struck yet</span>}
           {piece && <span className="meta">{piece.meter} · {piece.bpm} bpm</span>}
-          <span className={`status${status === 'playing' ? ' live' : ''}`}>
-            {status === 'idle' && !piece && 'Type something and press Play'}
-            {status === 'thinking' && 'Jev is choosing a key…'}
-            {status === 'playing' && 'Playing'}
-            {status === 'done' && 'Finished'}
+          <span className={`pulse${status === 'playing' ? ' live' : ''}`}>
+            {status === 'idle' && !piece && 'waiting'}
+            {status === 'thinking' && 'choosing a key…'}
+            {status === 'playing' && 'playing'}
+            {status === 'done' && 'finished'}
           </span>
         </div>
 
-        <Keyboard lit={lit} />
-        <p className="keyboard-status" role="status" aria-live="polite">{nowPlayingText}</p>
+        <Keyboard ref={keyboard} />
+        <p className="keyboard-status" role="status" aria-live="polite">{spokenNotes}</p>
       </div>
 
-      {(phrase || pieceDecisions.length > 0 || log.length > 0 || totals.calls > 0) && (
-        <details className="section">
-          <summary>How it's deciding</summary>
-          <div className="section-body">
-            {phrase && (
-              <>
-                <p className="field-label" style={{ marginTop: 0 }}>
-                  Phrase {phrase.n} — {phrase.spec.role}
-                  {phrase.spec.restate && ', bringing the opening back'}
-                  {phrase.spec.cadence && ', coming to rest'}
-                </p>
-                <div className="bars">
-                  {phrase.spec.bars.map((b, i) => {
-                    const globalIndex = phrase.barOffset + i
-                    const chose = decisions.find(d => d.group === `Bar ${globalIndex + 1}` && d.label === 'Chord')
-                    const p = chose?.options.find(o => o.key === chose.picked)?.p ?? 0
-                    return (
-                      <div key={i} className={`bar${bar?.index === globalIndex ? ' now' : ''}`}>
-                        <div className="chord">{b.chordLabel}</div>
-                        {chose && (
-                          <div className="conf" title={`Jev gave ${b.chordLabel} ${(p * 100).toFixed(1)}% of its weight across all 36 chords`}>
-                            <span className="track"><span className="fill" style={{ transform: `scaleX(${Math.max(0.02, p)})` }} /></span>
-                            <span className="pct">{(p * 100).toFixed(p >= 0.1 ? 0 : 1)}%</span>
-                          </div>
-                        )}
-                        <div className="detail">
-                          {b.figure.replace(/^w_/, '').replace(/_/g, ' ')}<br />
-                          {b.hand.replace(/^w_/, '').replace(/_/g, ' ')}<br />
-                          rests on {NOTE_NAMES[b.landing]}
-                        </div>
-                      </div>
-                    )
-                  })}
+      {phrase && (
+        <div className="bars">
+          {phrase.spec.bars.map((b, i) => {
+            const globalIndex = phrase.barOffset + i
+            const chose = decisions.find(d => d.group === `Bar ${globalIndex + 1}` && d.label === 'Chord')
+            const weight = chose?.options.find(o => o.key === chose.picked)?.p
+            return (
+              <div key={i} className={`bar${bar?.index === globalIndex ? ' now' : ''}`}>
+                <div className="chord">
+                  {b.chordLabel}
+                  {weight !== undefined && (
+                    <span
+                      className="weight"
+                      title={`Jev gave ${b.chordLabel} ${(weight * 100).toFixed(1)}% of its weight across all 36 chords`}
+                    >
+                      {(weight * 100).toFixed(weight >= 0.1 ? 0 : 1)}%
+                    </span>
+                  )}
                 </div>
-              </>
-            )}
+                <div className="detail">
+                  {b.figure.replace(/^w_/, '').replace(/_/g, ' ')}<br />
+                  {b.hand.replace(/^w_/, '').replace(/_/g, ' ')}<br />
+                  rests on {NOTE_NAMES[b.landing]}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
-            {current.chord && (
-              <>
-                <p className="field-label">Bar {(bar?.index ?? 0) + 1} — every chord it could have picked</p>
-                <Distribution d={current.chord} inKey={k => scalePcs.has(rootOf(k))} limit={12} />
-              </>
-            )}
+      {current.chord && (
+        <>
+          <p className="field-label spaced">every chord it could have struck, bar {(bar?.index ?? 0) + 1}</p>
+          <GhostField d={current.chord} inKey={k => scalePcs.has(rootOf(k))} limit={16} />
+        </>
+      )}
 
-            {current.landing && bar && (
+      {(current.landing || pieceDecisions.length > 0 || log.length > 0 || totals.calls > 0) && bar && (
+        <details className="section">
+          <summary>the rest of what it weighed</summary>
+          <div className="section-body">
+            {current.landing && (
               <>
-                <p className="field-label">…and which note it rests on</p>
-                <Distribution
+                <p className="field-label">where it could have rested this bar</p>
+                <GhostField
                   d={current.landing}
                   inKey={k => chordPcs(bar.spec.chord).includes(pcOf(k)) || scalePcs.has(pcOf(k))}
                   limit={12}
@@ -187,11 +199,11 @@ export function App() {
 
             {pieceDecisions.length > 0 && (
               <>
-                <p className="field-label">How it picked the key</p>
+                <p className="field-label spaced">how it picked the key</p>
                 {pieceDecisions.map(d => (
-                  <div key={d.id} style={{ marginBottom: 10 }}>
-                    <div style={{ color: 'var(--dim)', fontSize: 12, marginBottom: 4 }}>{d.label}</div>
-                    <Distribution d={d} inKey={() => true} limit={5} />
+                  <div key={d.id} style={{ marginBottom: 12 }}>
+                    <div style={{ color: 'var(--ghost)', fontSize: 12, marginBottom: 4 }}>{d.label}</div>
+                    <GhostField d={d} inKey={() => true} limit={6} />
                   </div>
                 ))}
               </>
@@ -199,7 +211,7 @@ export function App() {
 
             {log.length > 0 && (
               <>
-                <p className="field-label">Every phrase so far</p>
+                <p className="field-label spaced">every phrase so far</p>
                 <div className="log">
                   {log.map(l => (
                     <div key={l.n}>
@@ -215,7 +227,7 @@ export function App() {
 
             {totals.calls > 0 && (
               <>
-                <p className="field-label">Cost so far</p>
+                <p className="field-label spaced">cost so far</p>
                 <div className="stats">
                   <span><b>{totals.calls}</b> calls to Jev</span>
                   <span><b>{(totals.ms / 1000).toFixed(1)}s</b> thinking</span>
@@ -244,53 +256,73 @@ export function App() {
 const rootOf = (label: string) => Math.max(0, NOTE_NAMES.indexOf(label.replace(/[m7]/g, '') as (typeof NOTE_NAMES)[number]))
 const pcOf = (label: string) => Math.max(0, NOTE_NAMES.indexOf(label as (typeof NOTE_NAMES)[number]))
 
-function Distribution({ d, inKey, limit }: { d: Decision; inKey: (key: string) => boolean; limit: number }) {
+/** Every option Jev was offered, present at once as a dim ghost label. The one
+ *  it struck glows; options outside the key sit further into the dark rather
+ *  than vanishing, because refusing to filter the chord bank is the whole point. */
+function GhostField({ d, inKey, limit }: { d: Decision; inKey: (key: string) => boolean; limit: number }) {
   const shown = d.options.slice(0, limit)
-  const max = Math.max(0.0001, ...shown.map(o => o.p))
   return (
-    <div className="dist">
+    <div className="ghost-field">
       {shown.map(o => {
+        const struck = o.key === d.picked
         const out = !inKey(o.key)
+        const near = !struck && !out && o.p >= 0.03
         return (
-          <Row key={o.key} name={o.key} p={o.p} width={o.p / max} out={out} picked={o.key === d.picked} />
+          <span key={o.key} className={`opt${struck ? ' struck' : ''}${near ? ' near' : ''}${out ? ' out' : ''}`}>
+            {o.key}<span className="p">{(o.p * 100).toFixed(o.p >= 0.1 ? 0 : 1)}%</span>
+          </span>
         )
       })}
     </div>
   )
 }
 
-function Row({ name, p, width, out, picked }: { name: string; p: number; width: number; out: boolean; picked: boolean }) {
-  return (
-    <>
-      <span className={`name${out ? ' out' : ''}`} style={picked ? { color: 'var(--ink)', fontWeight: 600 } : undefined}>{name}</span>
-      <span className="track"><span className={`fill${out ? ' out' : ''}`} style={{ transform: `scaleX(${Math.max(0.01, width)})` }} /></span>
-      <span className="pct">{(p * 100).toFixed(p >= 0.1 ? 0 : 1)}%</span>
-    </>
-  )
-}
+export interface KeyboardHandle { setLit(midis: number[]): void }
 
-/** A1 to C7, the range the two hands actually reach. A key stays lit for as
- *  long as the note sounds, so this is the product, not a diagram of it. */
-function Keyboard({ lit }: { lit: number[] }) {
+const isBlack = (m: number) => [1, 3, 6, 8, 10].includes(mod12(m))
+
+/** A1 to C7. Geometry is fixed, so it is worked out once at module load. */
+const KEY_SHAPES = (() => {
   const low = 33
   const high = 96
   const whites: number[] = []
-  for (let m = low; m <= high; m++) if (![1, 3, 6, 8, 10].includes(mod12(m))) whites.push(m)
+  for (let m = low; m <= high; m++) if (!isBlack(m)) whites.push(m)
   const w = 100 / whites.length
-  const on = new Set(lit)
+  const shapes: { midi: number; black: boolean; left: number; width: number }[] = []
+  // Whites first, blacks after, so the blacks paint on top of them.
+  whites.forEach((m, i) => shapes.push({ midi: m, black: false, left: i * w, width: w }))
+  whites.forEach((m, i) => {
+    const b = m + 1
+    if (b <= high && isBlack(b)) shapes.push({ midi: b, black: true, left: (i + 1) * w - w * 0.3, width: w * 0.6 })
+  })
+  return shapes
+})()
+
+/** Eighty-eight ghost tubes, all present, all dim. A key that is sounding is
+ *  struck to a hard glow. This renders once and is then updated through the DOM
+ *  rather than through React, because it changes many times a second. */
+function Keyboard({ ref }: { ref?: Ref<KeyboardHandle> }) {
+  const els = useRef(new Map<number, HTMLDivElement>())
+  const on = useRef<number[]>([])
+
+  useImperativeHandle(ref, () => ({
+    setLit(midis: number[]) {
+      for (const m of on.current) if (!midis.includes(m)) els.current.get(m)?.classList.remove('on')
+      for (const m of midis) if (!on.current.includes(m)) els.current.get(m)?.classList.add('on')
+      on.current = midis
+    },
+  }), [])
+
   return (
     <div className="keyboard" aria-hidden="true">
-      {whites.map((m, i) => (
-        <div key={m} className={`w${on.has(m) ? ' on' : ''}`} style={{ left: `${i * w}%`, width: `${w}%` }} />
+      {KEY_SHAPES.map(k => (
+        <div
+          key={k.midi}
+          ref={el => { if (el) els.current.set(k.midi, el); else els.current.delete(k.midi) }}
+          className={`key ${k.black ? 'b' : 'w'}`}
+          style={{ left: `${k.left}%`, width: `${k.width}%` }}
+        />
       ))}
-      {whites.map((m, i) => {
-        const black = m + 1
-        if (black > high || ![1, 3, 6, 8, 10].includes(mod12(black))) return null
-        return (
-          <div key={black} className={`b${on.has(black) ? ' on' : ''}`}
-            style={{ left: `${(i + 1) * w - w * 0.3}%`, width: `${w * 0.6}%` }} />
-        )
-      })}
     </div>
   )
 }
