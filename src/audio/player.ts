@@ -66,10 +66,12 @@ export class Player {
     this.down.clear()
     this.queue = []
 
+    // One context and one piano for the life of the page. Only the first play
+    // pays for building them.
     const ctx = this.ctx ?? new AudioContext()
     this.ctx = ctx
+    this.piano ??= new Piano(ctx)
     if (ctx.state === 'suspended') await ctx.resume()
-    this.piano = new Piano(ctx)
 
     let piece: Piece
     let sig: string
@@ -229,7 +231,7 @@ export class Player {
     if (this.keyFrame !== null) { cancelAnimationFrame(this.keyFrame); this.keyFrame = null }
     this.queue = []
     if (this.down.size) { this.down.clear(); this.hooks.onKeys([]) }
-    if (this.ctx) { void this.ctx.close(); this.ctx = null; this.piano = null }
+    this.piano?.hush()
   }
 
   stop(reason: 'ended' | 'stopped' = 'stopped') {

@@ -70,6 +70,8 @@ export class Piano {
   /** End times of notes already scheduled, so the polyphony limit counts notes
    *  that overlap in the music rather than notes handed over at the same moment. */
   private ringing: number[] = []
+  /** Everything built and not yet ended, so stopping can silence it. */
+  private sources = new Set<AudioScheduledSourceNode>()
 
   private liveNodes = 0
   private notesPlayed = 0
@@ -112,6 +114,21 @@ export class Piano {
   }
 
   set volume(v: number) { this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05) }
+
+  /** Lift the hands and damp every string, without closing the context.
+   *  Closing it and building a new one, convolver and all, is what made
+   *  pressing play block for the best part of a second. */
+  hush() {
+    const now = this.ctx.currentTime
+    const level = this.out.gain.value
+    this.out.gain.cancelScheduledValues(now)
+    this.out.gain.setValueAtTime(level, now)
+    this.out.gain.linearRampToValueAtTime(0, now + 0.08)
+    for (const src of this.sources) { try { src.stop(now + 0.1) } catch { /* already stopped */ } }
+    this.ringing = []
+    // Back up once the damped notes are gone, ready for the next piece.
+    this.out.gain.setValueAtTime(level, now + 0.25)
+  }
 
   /** How many notes are sounding, and how much graph is alive. */
   get stats() {
@@ -162,10 +179,12 @@ export class Piano {
     g.connect(this.wet)
     src.start(at)
     src.stop(at + 0.07)
+    this.sources.add(src)
     this.track(3)
     // Every node has to leave the graph once it has stopped, or a long piece
     // drags thousands of dead nodes behind it for the render thread to walk.
     src.addEventListener('ended', () => {
+      this.sources.delete(src)
       src.disconnect(); bp.disconnect(); g.disconnect(); this.track(-3)
     }, { once: true })
   }
@@ -214,8 +233,10 @@ export class Piano {
     g.connect(this.wet)
     osc.start(t)
     osc.stop(end)
+    this.sources.add(osc)
     this.track(3)
     osc.addEventListener('ended', () => {
+      this.sources.delete(osc)
       osc.disconnect(); tone.disconnect(); g.disconnect(); this.track(-3)
     }, { once: true })
 
