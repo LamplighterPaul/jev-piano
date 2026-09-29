@@ -1,8 +1,11 @@
-import { useCallback, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { MODES, NOTE_NAMES, chordPcs, mod12 } from '../shared/theory.ts'
 import { DYNAMIC_LEVELS, DYNAMIC_VELOCITY, REGISTER_LEVELS } from '../shared/catalog.ts'
 import type { BarSpec, Decision, Piece, PhraseSpec, Stats } from '../shared/harness.ts'
 import { Player, type Played } from './audio/player.ts'
+import { toMidi } from '../shared/midi.ts'
+import { barsOf, fromLink, secondsOf, toLink, type Recording } from '../shared/recording.ts'
+import { forget, loadHistory, remember } from './history.ts'
 
 const SUGGESTIONS = [
   'a slow, sad waltz',
@@ -25,19 +28,26 @@ export function App() {
   const [sounding, setSounding] = useState<number[]>([])
   const [log, setLog] = useState<Line[]>([])
   const [totals, setTotals] = useState({ calls: 0, ms: 0, tokens: 0, usd: 0 })
-  const [status, setStatus] = useState<'idle' | 'thinking' | 'playing' | 'done'>('idle')
+  const [status, setStatus] = useState<'idle' | 'thinking' | 'playing' | 'replaying' | 'done'>('idle')
   const [error, setError] = useState('')
   const [refusal, setRefusal] = useState('')
+  /** The piece on screen, once there is a whole one to replay or take away. */
+  const [take, setTake] = useState<Recording | null>(null)
+  const [history, setHistory] = useState<Recording[]>(loadHistory)
+  /** A piece someone sent as a link, waiting for a press of Listen. */
+  const [shared, setShared] = useState<Recording | null>(null)
+  const [notice, setNotice] = useState('')
 
   const keyboard = useRef<KeyboardHandle>(null)
   const lastSpoken = useRef(0)
 
-  const add = useCallback((s: Stats) => setTotals(t => ({
+  // A replay costs nothing, and a shared link carries no cost to show.
+  const add = useCallback((s: Stats) => s.questions > 0 && setTotals(t => ({
     calls: t.calls + 1, ms: t.ms + s.ms, tokens: t.tokens + s.inputTokens, usd: t.usd + s.usd,
   })), [])
 
   const player = useMemo(() => new Player({
-    onPiece(p, d, s) { setPiece(p); setPieceDecisions(d); add(s); setStatus('playing') },
+    onPiece(p, d, s) { setPiece(p); setPieceDecisions(d); add(s); setStatus(st => (st === 'replaying' ? st : 'playing')) },
     onPhrase(p: Played) {
       setPhrase({ spec: p.phrase, barOffset: p.barOffset, n: p.index + 1 })
       setDecisions(p.decisions)
@@ -68,20 +78,64 @@ export function App() {
     },
     onError(message) { setError(message); setStatus('idle') },
     onRefuse(message) { setRefusal(message); setStatus('idle') },
+    onRecording(rec) { setTake(rec); setHistory(remember(rec)) },
   }), [add])
+
+  // Stop first, so the stopped piece reports itself finished before the next
+  // one says it has started, and not after.
+  const reset = (text: string) => {
+    player.stop()
+    setBrief(text)
+    setError(''); setRefusal(''); setNotice(''); setPiece(null); setPhrase(null); setDecisions([]); setPieceDecisions([])
+    setBar(null); setLog([]); setSounding([]); setTotals({ calls: 0, ms: 0, tokens: 0, usd: 0 })
+  }
 
   const go = (text: string) => {
     const t = text.trim()
     if (!t) return
-    // Stop first, so the stopped piece reports itself finished before this
-    // one says it is thinking, and not after.
-    player.stop()
-    setBrief(t)
-    setError(''); setRefusal(''); setPiece(null); setPhrase(null); setDecisions([]); setPieceDecisions([])
-    setBar(null); setLog([]); setSounding([]); setTotals({ calls: 0, ms: 0, tokens: 0, usd: 0 })
+    reset(t)
+    setTake(null)
     setStatus('thinking')
     void player.start(t, Math.floor(Math.random() * 1e9) + 1)
   }
+
+  const replay = (rec: Recording) => {
+    reset(rec.piece.brief)
+    setTake(rec)
+    setStatus('replaying')
+    void player.replay(rec)
+  }
+
+  const download = (rec: Recording) => {
+    const url = URL.createObjectURL(new Blob([toMidi(rec)], { type: 'audio/midi' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${slug(rec.piece.brief)}.mid`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  const share = async (rec: Recording) => {
+    const link = `${location.origin}${location.pathname}#listen=${await toLink(rec)}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setNotice('Link copied. Whoever opens it hears this piece, note for note.')
+    } catch {
+      setNotice(link)
+    }
+  }
+
+  // A link someone shared. Nothing plays until it is asked to: a browser will
+  // not start sound without a press, and neither should we.
+  useEffect(() => {
+    const read = () => {
+      const m = /^#listen=([\w-]+)$/.exec(location.hash)
+      if (m) void fromLink(m[1]).then(rec => setShared(rec ?? null))
+    }
+    read()
+    window.addEventListener('hashchange', read)
+    return () => window.removeEventListener('hashchange', read)
+  }, [])
 
   const scalePcs = useMemo(
     () => new Set(piece ? MODES[piece.mode].steps.map(s => (piece.tonic + s) % 12) : []),
@@ -97,7 +151,7 @@ export function App() {
     }
   }, [bar, decisions])
 
-  const busy = status === 'thinking' || status === 'playing'
+  const busy = status === 'thinking' || status === 'playing' || status === 'replaying'
 
   const spokenNotes = useMemo(() => {
     if (!sounding.length) return 'No notes sounding'
@@ -132,6 +186,16 @@ export function App() {
         {SUGGESTIONS.map(s => <button key={s} onClick={() => go(s)} disabled={busy}>{s}</button>)}
       </div>
 
+      {shared && !piece && (
+        <div className="shared">
+          <p>
+            Someone sent you a piece Jev played for <b>{shared.piece.brief}</b>.{' '}
+            <span className="meta">{describe(shared)}</span>
+          </p>
+          <button className="go" onClick={() => replay(shared)}>Listen</button>
+        </div>
+      )}
+
       {error && <p className="error" role="alert">{error}</p>}
       {refusal && <p className="refusal" role="status">{refusal}</p>}
 
@@ -141,10 +205,11 @@ export function App() {
             ? <span className="home">{NOTE_NAMES[piece.tonic]} {piece.mode.replace('_', ' ')}</span>
             : <span className="home unset">no key struck yet</span>}
           {piece && <span className="meta">{piece.meter} · {piece.bpm} bpm</span>}
-          <span className={`pulse${status === 'playing' ? ' live' : ''}`}>
-            {status === 'idle' && !piece && 'waiting'}
+          <span className={`pulse${status === 'playing' || status === 'replaying' ? ' live' : ''}`}>
+            {status === 'idle' && (piece ? 'stopped' : 'waiting')}
             {status === 'thinking' && 'choosing a key…'}
             {status === 'playing' && 'playing'}
+            {status === 'replaying' && 'playing it again'}
             {status === 'done' && 'finished'}
           </span>
         </div>
@@ -152,6 +217,15 @@ export function App() {
         <Keyboard ref={keyboard} />
         <p className="keyboard-status" role="status" aria-live="polite">{spokenNotes}</p>
       </div>
+
+      {take && !busy && (
+        <div className="takeaway">
+          <button onClick={() => replay(take)}>Play it again</button>
+          <button onClick={() => download(take)}>Download MIDI</button>
+          <button onClick={() => void share(take)}>Copy a link</button>
+          {notice && <span className="notice" role="status">{notice}</span>}
+        </div>
+      )}
 
       {phrase && (
         <div className="bars">
@@ -236,7 +310,7 @@ export function App() {
 
             {totals.calls > 0 && (
               <>
-                <p className="field-label spaced">cost so far</p>
+                <p className="field-label spaced">{status === 'replaying' ? 'what it cost the first time' : 'cost so far'}</p>
                 <div className="stats">
                   <span><b>{totals.calls}</b> calls to Jev</span>
                   <span><b>{(totals.ms / 1000).toFixed(1)}s</b> thinking</span>
@@ -245,6 +319,29 @@ export function App() {
                 </div>
               </>
             )}
+          </div>
+        </details>
+      )}
+
+      {history.length > 0 && (
+        <details className="section">
+          <summary>pieces played here ({history.length})</summary>
+          <div className="section-body">
+            <p className="field-label">kept in this browser only, newest first</p>
+            <div className="history">
+              {history.map(rec => (
+                <div key={rec.when}>
+                  <span className="brief">{rec.piece.brief}</span>
+                  <span className="meta">{describe(rec)} · {new Date(rec.when).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                  <span className="actions">
+                    <button onClick={() => replay(rec)} disabled={busy}>play</button>
+                    <button onClick={() => download(rec)}>midi</button>
+                    <button onClick={() => void share(rec)}>link</button>
+                    <button onClick={() => setHistory(forget(rec.when))} aria-label={`Forget ${rec.piece.brief}`}>forget</button>
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </details>
       )}
@@ -261,6 +358,14 @@ export function App() {
     </>
   )
 }
+
+const describe = (rec: Recording) => {
+  const s = Math.round(secondsOf(rec))
+  return `${NOTE_NAMES[rec.piece.tonic]} ${rec.piece.mode.replace('_', ' ')} · ${rec.piece.meter} · ${rec.piece.bpm} bpm · ${barsOf(rec)} bars, ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+const slug = (text: string) =>
+  text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'jev-piano'
 
 /** "soft: quiet and inward" is just "soft" on a bar. */
 const short = (levels: string[], i: number) => levels[i]?.split(':')[0] ?? ''

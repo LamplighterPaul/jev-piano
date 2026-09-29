@@ -27,6 +27,10 @@ Add `TYPESAFE_API_KEY_2` (and `_3`, `_4`…) to rotate over several keys: calls 
 key that comes back rate limited stands aside for the next one. `TYPESAFE_API_KEYS` also takes a
 comma-separated list. `GET /api/health` reports how many it found.
 
+The piece is signed when it is settled, and a phrase is only made for a piece that verifies, so a
+brief can never reach Jev without first being asked whether it is safe to play. Set `PIECE_SECRET`
+when more than one process serves the site; one process makes up its own.
+
 ## Why "it cannot play piano" was the wrong test
 
 The obvious experiment is to feed Jev the notes so far and ask for the next one. That cannot work,
@@ -66,6 +70,7 @@ close to the last one, the clock, the decay of a string. A piano is already a pi
 sits down at it, and a pianist does not re-derive A440 each time they play.
 
 The one limit code holds that Jev does not: a piece stops after sixteen phrases whatever Jev thinks.
+And when it does stop, the last chord is left to ring for a bar, as a pianist keeps the pedal down.
 
 ## How a phrase gets made
 
@@ -96,6 +101,20 @@ The state also tells Jev, as plain fact, how static the music has been — *"6 o
 Cm; 2 different chords in that stretch"*. It is not told what to do about it. Before that, a brief
 like *rain on a window at 3am* produced the same four bars three times over.
 
+## Keeping a piece
+
+Everything Jev decided is in the phrases, and turning phrases into notes is mechanical, so a piece
+is kept as its decisions rather than as audio. Once it is over it can be:
+
+- **played again**, note for note, without asking Jev anything — it costs nothing;
+- **downloaded as MIDI**, one track per hand, with the tempo, metre and key signature;
+- **sent as a link**. The link carries the music — every bar's chord, shape, hand, weight, height and
+  resting note — in a few hundred characters, and whoever opens it hears exactly the same piece.
+  The distributions stay behind; they would make it tens of kilobytes.
+
+The last twenty pieces are kept in the browser under *pieces played here*. Nothing is stored on the
+server.
+
 ## The catalog
 
 Melodic figures are shapes, not tunes: *climb through the chord, one note a beat*, written in rungs
@@ -106,6 +125,8 @@ a waltz oom-pah-pah, an Alberti bass, bare octaves, silence. Jev picks which, ev
 - `shared/catalog.ts` — figures, left-hand patterns, dynamic and register levels
 - `shared/harness.ts` — the questions, and how answers become a phrase
 - `shared/render.ts` — a phrase becomes notes
+- `shared/recording.ts` — a piece kept, and sent as a link
+- `shared/midi.ts` — a piece as a MIDI file
 - `src/audio/piano.ts` — six partials, a little inharmonicity, a hammer and a small room
 
 ## Hearing it without a browser
@@ -116,6 +137,9 @@ a waltz oom-pah-pah, an Alberti bass, bare octaves, silence. Jev picks which, ev
 
 Prints the piece as it is decided, with the full distribution for the opening chord and a count of
 how many chords landed in the key.
+
+`node scripts/check-recording.ts` checks, with no key, that a piece survives the trip out as MIDI
+and as a link.
 
 ## Cost
 

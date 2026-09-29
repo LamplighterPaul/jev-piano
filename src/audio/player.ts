@@ -11,6 +11,7 @@
 
 import { renderPhrase, type Note, type RenderState } from '../../shared/render.ts'
 import type { BarSpec, Context, Decision, Piece, PhraseSpec, Stats } from '../../shared/harness.ts'
+import { takesOf, type Recording } from '../../shared/recording.ts'
 import { Piano } from './piano.ts'
 
 export interface Played { phrase: PhraseSpec; decisions: Decision[]; stats: Stats; index: number; barOffset: number }
@@ -25,6 +26,39 @@ export interface Hooks {
   onError(message: string): void
   /** Jev declined the brief. Not a failure: nothing went wrong. */
   onRefuse(message: string): void
+  /** A piece Jev played live, as much of it as was heard, once it is over. */
+  onRecording(rec: Recording): void
+}
+
+/** Where the phrases come from: Jev, deciding as it goes, or a recording of
+ *  a piece it has already decided. The performing is the same either way. */
+interface Source {
+  open(): Promise<{ piece: Piece; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>
+  phrase(piece: Piece, context: Context): Promise<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>
+  /** Only a live piece is new enough to be worth keeping. */
+  records: boolean
+}
+
+function live(brief: string, seed: number): Source {
+  let sig = ''
+  return {
+    records: true,
+    async open() {
+      const res = await post<{ piece: Piece; sig: string; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
+      sig = res.sig
+      return res
+    },
+    phrase: (piece, context) => post('/api/phrase', { piece, sig, context }),
+  }
+}
+
+function recorded(rec: Recording): Source {
+  const takes = takesOf(rec)
+  return {
+    records: false,
+    open: async () => ({ piece: rec.piece, decisions: rec.decisions, stats: rec.stats }),
+    phrase: async (_, context) => takes[context.index],
+  }
 }
 
 /** Wake this long before the current phrase runs out to fetch the next one. */
@@ -52,6 +86,8 @@ export class Player {
   private queue: Pending[] = []
   private ticker: number | null = null
   private keyFrame: number | null = null
+  /** The live piece so far: only the phrases that have actually sounded. */
+  private recording: Recording | null = null
 
   private readonly hooks: Hooks
 
@@ -59,7 +95,12 @@ export class Player {
 
   get running() { return !this.stopped }
 
-  async start(brief: string, seed: number) {
+  start(brief: string, seed: number) { return this.perform(live(brief, seed), seed) }
+
+  /** Play a recording again, note for note, without asking Jev anything. */
+  replay(rec: Recording) { return this.perform(recorded(rec), rec.seed) }
+
+  private async perform(source: Source, seed: number) {
     this.stop('stopped')
     const run = ++this.generation
     const current = () => !this.stopped && run === this.generation
@@ -76,14 +117,15 @@ export class Player {
     if (ctx.state === 'suspended') await ctx.resume()
 
     let piece: Piece
-    let sig: string
     try {
-      const res = await post<{ piece: Piece; sig: string; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
+      const res = await source.open()
       if (res.error) return this.fail(res.error)
       if (res.refuse) return this.fail(res.refuse, true)
       if (!current()) return
       piece = res.piece
-      sig = res.sig
+      if (source.records) {
+        this.recording = { v: 1, when: Date.now(), seed, piece, decisions: res.decisions, stats: res.stats, phrases: [] }
+      }
       this.hooks.onPiece(piece, res.decisions, res.stats)
     } catch (e) {
       return this.fail(e instanceof Error ? e.message : 'Could not reach Jev.')
@@ -98,7 +140,7 @@ export class Player {
     while (current()) {
       let played: Played
       try {
-        const res = await post<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>('/api/phrase', { piece, sig, context })
+        const res = await source.phrase(piece, context)
         if (res.error) return this.fail(res.error)
         played = { ...res, index: context.index, barOffset: context.barsPlayed }
       } catch (e) {
@@ -111,8 +153,12 @@ export class Player {
       this.nextStart = Math.max(this.nextStart, ctxNow() + 0.15)
       const start = this.nextStart
       // A phrase is fetched seconds before it is heard. Show it when it sounds,
-      // not when it arrives, or the screen runs ahead of the music.
-      this.after(start, () => this.hooks.onPhrase(played))
+      // not when it arrives, or the screen runs ahead of the music. It joins the
+      // recording then too, so a piece stopped early keeps what was heard.
+      this.after(start, () => {
+        this.recording?.phrases.push({ phrase, decisions: played.decisions, stats: played.stats })
+        this.hooks.onPhrase(played)
+      })
       this.enqueue(renderPhrase(piece, phrase, this.render), start, beat, piece.beats, context.barsPlayed, phrase)
 
       const length = phrase.bars.length * piece.beats * beat
@@ -125,15 +171,24 @@ export class Player {
       context.role = phrase.next
 
       if (phrase.end) {
-        this.after(this.nextStart + 1.6, () => {
+        // The last chord rings for a bar past the end of the phrase.
+        this.after(this.nextStart + piece.beats * beat + 0.6, () => {
           if (run !== this.generation) return
           this.stopped = true
+          this.keep()
           this.hooks.onFinish('ended')
         })
         return
       }
       await this.sleepUntil(this.nextStart - LOOKAHEAD)
     }
+  }
+
+  /** Hand over the live piece, if any of it was heard. */
+  private keep() {
+    const rec = this.recording
+    this.recording = null
+    if (rec?.phrases.length) this.hooks.onRecording(rec)
   }
 
   /** Decided notes go in the queue; the ticker builds them when they are due. */
@@ -223,6 +278,7 @@ export class Player {
   private fail(message: string, refused = false) {
     this.stopped = true
     this.release()
+    this.keep()
     if (refused) this.hooks.onRefuse(message)
     else this.hooks.onError(message)
   }
@@ -241,6 +297,7 @@ export class Player {
     const was = !this.stopped
     this.stopped = true
     this.release()
+    this.keep()
     if (was) this.hooks.onFinish(reason)
   }
 }

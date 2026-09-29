@@ -23,6 +23,7 @@ env:
     PER_MINUTE: 40     # requests a minute, per address
   secret:
     - TYPESAFE_API_KEY    # add TYPESAFE_API_KEY_2, _3 ... to rotate over several
+    - PIECE_SECRET        # signs each piece; any long random string
 
 registry:
   server: your.registry
