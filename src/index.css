@@ -122,6 +122,15 @@ button:disabled { opacity: 0.35; cursor: default; transform: none; }
   font-size: 14px;
 }
 
+/* A brief Jev declined is not an error: nothing broke, it chose not to. */
+.refusal {
+  color: var(--ghost);
+  border-left: 2px solid var(--ghost-dim);
+  padding: 8px 0 8px 14px;
+  margin: 0 0 20px;
+  font-size: 14px;
+}
+
 /* ---- the tube stack: 88 ghost keys, struck ones glow ---- */
 
 .stage { margin-bottom: 8px; }
