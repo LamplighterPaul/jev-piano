@@ -131,6 +131,17 @@ button:disabled { opacity: 0.35; cursor: default; transform: none; }
   font-size: 14px;
 }
 
+/* A piece someone sent, waiting to be listened to. */
+.shared {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  border-left: 2px solid var(--strike);
+  padding: 6px 0 6px 14px;
+  margin: 0 0 28px;
+}
+.shared p { margin: 0; flex: 1 1 320px; color: var(--ghost); font-size: 14px; }
+.shared b { color: var(--bone); font-weight: 600; }
+.shared .meta { display: block; font-size: 13px; }
+
 /* ---- the tube stack: 88 ghost keys, struck ones glow ---- */
 
 .stage { margin-bottom: 8px; }
@@ -170,6 +181,19 @@ button:disabled { opacity: 0.35; cursor: default; transform: none; }
 .keyboard .key.b.on { transition: background-color 0ms, box-shadow 0ms, border-color 900ms ease 200ms; }
 
 .keyboard-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* What to do with a piece once it is over. Quieter than Play. */
+.takeaway { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 18px; }
+.takeaway button, .history button {
+  background: transparent;
+  box-shadow: none;
+  border-color: var(--ghost-dim);
+  color: var(--ghost);
+  font-weight: 400;
+}
+.takeaway button { font-size: 13px; padding: 8px 16px; }
+.takeaway button:hover:not(:disabled), .history button:hover:not(:disabled) { color: var(--bone); }
+.takeaway .notice { color: var(--ghost); font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
 
 /* ---- the ghost field: every option present, one struck ---- */
 
@@ -271,6 +295,15 @@ details.section .section-body { padding: 8px 2px 20px; }
 
 .stats { display: flex; gap: 22px; flex-wrap: wrap; color: var(--ghost); font-size: 13px; }
 .stats b { color: var(--bone); font-weight: 600; font-variant-numeric: tabular-nums; font-family: 'Fira Code', ui-monospace, monospace; }
+
+.history div {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 8px 0; border-bottom: 1px solid var(--ghost-dim);
+}
+.history .brief { color: var(--bone); font-size: 14px; }
+.history .meta { color: var(--ghost); font-size: 12px; font-family: 'Fira Code', ui-monospace, monospace; flex: 1 1 auto; }
+.history .actions { display: flex; gap: 6px; }
+.history button { font-size: 12px; padding: 4px 10px; }
 
 footer { color: var(--ghost-dim); font-size: 13px; margin-top: 48px; line-height: 1.75; max-width: 68ch; }
 
