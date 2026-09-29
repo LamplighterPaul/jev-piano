@@ -1,5 +1,6 @@
 import { useCallback, useImperativeHandle, useMemo, useRef, useState, type Ref } from 'react'
 import { MODES, NOTE_NAMES, chordPcs, mod12 } from '../shared/theory.ts'
+import { DYNAMIC_LEVELS, DYNAMIC_VELOCITY, REGISTER_LEVELS } from '../shared/catalog.ts'
 import type { BarSpec, Decision, Piece, PhraseSpec, Stats } from '../shared/harness.ts'
 import { Player, type Played } from './audio/player.ts'
 
@@ -26,6 +27,7 @@ export function App() {
   const [totals, setTotals] = useState({ calls: 0, ms: 0, tokens: 0, usd: 0 })
   const [status, setStatus] = useState<'idle' | 'thinking' | 'playing' | 'done'>('idle')
   const [error, setError] = useState('')
+  const [refusal, setRefusal] = useState('')
 
   const keyboard = useRef<KeyboardHandle>(null)
   const lastSpoken = useRef(0)
@@ -58,19 +60,24 @@ export function App() {
       if (now - lastSpoken.current > 500) { lastSpoken.current = now; setSounding(midis) }
     },
     onFinish(reason) {
+      // The bars, the distributions and the log stay up: a piece that has
+      // finished is still worth reading. Only the keyboard goes dark.
       setStatus(reason === 'ended' ? 'done' : 'idle')
-      setBar(null)
       keyboard.current?.setLit([])
       setSounding([])
     },
     onError(message) { setError(message); setStatus('idle') },
+    onRefuse(message) { setRefusal(message); setStatus('idle') },
   }), [add])
 
   const go = (text: string) => {
     const t = text.trim()
     if (!t) return
+    // Stop first, so the stopped piece reports itself finished before this
+    // one says it is thinking, and not after.
+    player.stop()
     setBrief(t)
-    setError(''); setPiece(null); setPhrase(null); setDecisions([]); setPieceDecisions([])
+    setError(''); setRefusal(''); setPiece(null); setPhrase(null); setDecisions([]); setPieceDecisions([])
     setBar(null); setLog([]); setSounding([]); setTotals({ calls: 0, ms: 0, tokens: 0, usd: 0 })
     setStatus('thinking')
     void player.start(t, Math.floor(Math.random() * 1e9) + 1)
@@ -126,6 +133,7 @@ export function App() {
       </div>
 
       {error && <p className="error" role="alert">{error}</p>}
+      {refusal && <p className="refusal" role="status">{refusal}</p>}
 
       <div className="stage">
         <div className="readout">
@@ -152,7 +160,7 @@ export function App() {
             const chose = decisions.find(d => d.group === `Bar ${globalIndex + 1}` && d.label === 'Chord')
             const weight = chose?.options.find(o => o.key === chose.picked)?.p
             return (
-              <div key={i} className={`bar${bar?.index === globalIndex ? ' now' : ''}`}>
+              <div key={i} className={`bar${busy && bar?.index === globalIndex ? ' now' : ''}`}>
                 <div className="chord">
                   {b.chordLabel}
                   {weight !== undefined && (
@@ -167,7 +175,8 @@ export function App() {
                 <div className="detail">
                   {b.figure.replace(/^w_/, '').replace(/_/g, ' ')}<br />
                   {b.hand.replace(/^w_/, '').replace(/_/g, ' ')}<br />
-                  rests on {NOTE_NAMES[b.landing]}
+                  rests on {NOTE_NAMES[b.landing]}<br />
+                  {short(DYNAMIC_LEVELS, DYNAMIC_VELOCITY.indexOf(b.dynamic))}, sits {short(REGISTER_LEVELS, b.register)}
                 </div>
               </div>
             )
@@ -182,11 +191,11 @@ export function App() {
         </>
       )}
 
-      {(current.landing || pieceDecisions.length > 0 || log.length > 0 || totals.calls > 0) && bar && (
+      {(current.landing || pieceDecisions.length > 0 || log.length > 0 || totals.calls > 0) && piece && (
         <details className="section">
           <summary>the rest of what it weighed</summary>
           <div className="section-body">
-            {current.landing && (
+            {current.landing && bar && (
               <>
                 <p className="field-label">where it could have rested this bar</p>
                 <GhostField
@@ -252,6 +261,9 @@ export function App() {
     </>
   )
 }
+
+/** "soft: quiet and inward" is just "soft" on a bar. */
+const short = (levels: string[], i: number) => levels[i]?.split(':')[0] ?? ''
 
 const rootOf = (label: string) => Math.max(0, NOTE_NAMES.indexOf(label.replace(/[m7]/g, '') as (typeof NOTE_NAMES)[number]))
 const pcOf = (label: string) => Math.max(0, NOTE_NAMES.indexOf(label as (typeof NOTE_NAMES)[number]))

@@ -23,6 +23,8 @@ export interface Hooks {
   onKeys(midi: number[]): void
   onFinish(reason: 'ended' | 'stopped'): void
   onError(message: string): void
+  /** Jev declined the brief. Not a failure: nothing went wrong. */
+  onRefuse(message: string): void
 }
 
 /** Wake this long before the current phrase runs out to fetch the next one. */
@@ -78,7 +80,7 @@ export class Player {
     try {
       const res = await post<{ piece: Piece; sig: string; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
       if (res.error) return this.fail(res.error)
-      if (res.refuse) return this.fail(res.refuse)
+      if (res.refuse) return this.fail(res.refuse, true)
       if (!current()) return
       piece = res.piece
       sig = res.sig
@@ -218,10 +220,11 @@ export class Player {
 
   /** A failed run has to let go of the clock and the instrument too, or its
    *  timers keep firing into a piece that is no longer playing. */
-  private fail(message: string) {
+  private fail(message: string, refused = false) {
     this.stopped = true
     this.release()
-    this.hooks.onError(message)
+    if (refused) this.hooks.onRefuse(message)
+    else this.hooks.onError(message)
   }
 
   private release() {
@@ -244,5 +247,10 @@ export class Player {
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  // Our own errors come back as JSON with an `error` field. Anything else is a
+  // proxy's error page, and parsing it would only report a stray '<'.
+  if (!res.headers.get('content-type')?.includes('application/json')) {
+    throw new Error(`The server is not answering properly right now (${res.status}). Try again in a moment.`)
+  }
   return await res.json() as T
 }
