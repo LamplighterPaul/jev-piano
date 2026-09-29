@@ -36,14 +36,17 @@ export function renderPhrase(piece: Piece, phrase: PhraseSpec, state: RenderStat
     state.lastVoicing = voicing
     const bass = nearestPc(bar.chord.root, 40)
     const hand = byId(HANDS, bar.hand) ?? HANDS[0]
-    for (const cell of hand.notes) {
+    hand.notes.forEach((cell, i) => {
       const v = bar.dynamic * 0.78 * (cell.v ?? 1)
+      // The last thing a piece does is let its final chord ring. A pianist
+      // keeps the pedal down after the last note; nobody decides to.
+      const beats = isLast && phrase.end && i === hand.notes.length - 1 ? cell.d + piece.beats : cell.d
       if (cell.chord) {
-        for (const m of voicing) notes.push({ at: barStart + cell.t, beats: cell.d, midi: m, velocity: v * 0.85, hand: 'left', bar: b })
+        for (const m of voicing) notes.push({ at: barStart + cell.t, beats, midi: m, velocity: v * 0.85, hand: 'left', bar: b })
       } else {
-        notes.push({ at: barStart + cell.t, beats: cell.d, midi: ladder(chord, bass, cell.c ?? 0), velocity: v, hand: 'left', bar: b })
+        notes.push({ at: barStart + cell.t, beats, midi: ladder(chord, bass, cell.c ?? 0), velocity: v, hand: 'left', bar: b })
       }
-    }
+    })
 
     // --- right hand
     const figure = byId(FIGURES, bar.figure) ?? FIGURES[0]
@@ -58,8 +61,11 @@ export function renderPhrase(piece: Piece, phrase: PhraseSpec, state: RenderStat
       const last = i === cells.length - 1
       notes.push({
         at: barStart + cell.t,
-        // A phrase that comes to rest holds its final note across the bar line.
-        beats: last && isLast && phrase.cadence ? cell.d + piece.beats * 0.5 : cell.d,
+        // A phrase that comes to rest holds its final note across the bar line,
+        // and the one that ends the piece holds it for a whole bar more.
+        beats: last && isLast && phrase.end ? cell.d + piece.beats
+          : last && isLast && phrase.cadence ? cell.d + piece.beats * 0.5
+          : cell.d,
         midi,
         velocity: Math.min(1, bar.dynamic * (cell.v ?? 1)),
         hand: 'right',

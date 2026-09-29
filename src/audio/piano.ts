@@ -70,6 +70,12 @@ export class Piano {
   /** End times of notes already scheduled, so the polyphony limit counts notes
    *  that overlap in the music rather than notes handed over at the same moment. */
   private ringing: number[] = []
+  /** Everything built and not yet ended, so stopping can silence it. */
+  private sources = new Set<AudioScheduledSourceNode>()
+
+  /** The level the piano plays at, kept here because reading the gain back
+   *  mid-fade reports the fade, not the level. */
+  private level = 0.34
 
   private liveNodes = 0
   private notesPlayed = 0
@@ -79,7 +85,7 @@ export class Piano {
   constructor(ctx: AudioContext) {
     this.ctx = ctx
     this.out = ctx.createGain()
-    this.out.gain.value = 0.34
+    this.out.gain.value = this.level
 
     // A chord is several notes at once, so the bus has to survive more than
     // one note's worth of signal. Gentle compression for glue, then a hard
@@ -111,7 +117,25 @@ export class Piano {
     comp.connect(limiter).connect(this.out).connect(ctx.destination)
   }
 
-  set volume(v: number) { this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05) }
+  set volume(v: number) { this.level = v; this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05) }
+
+  /** Lift the hands and damp every string, without closing the context.
+   *  Closing it and building a new one, convolver and all, is what made
+   *  pressing play block for the best part of a second. The piano stays
+   *  silent, room and all, until `wake` says the next piece is starting. */
+  hush() {
+    const now = this.ctx.currentTime
+    this.out.gain.cancelScheduledValues(now)
+    this.out.gain.setValueAtTime(this.out.gain.value, now)
+    this.out.gain.linearRampToValueAtTime(0, now + 0.08)
+    for (const src of this.sources) { try { src.stop(now + 0.1) } catch { /* already stopped */ } }
+    this.ringing = []
+  }
+
+  /** Back to playing level just before `at`, when the next piece begins. */
+  wake(at: number) {
+    this.out.gain.setValueAtTime(this.level, Math.max(this.ctx.currentTime, at - 0.02))
+  }
 
   /** How many notes are sounding, and how much graph is alive. */
   get stats() {
@@ -162,10 +186,12 @@ export class Piano {
     g.connect(this.wet)
     src.start(at)
     src.stop(at + 0.07)
+    this.sources.add(src)
     this.track(3)
     // Every node has to leave the graph once it has stopped, or a long piece
     // drags thousands of dead nodes behind it for the render thread to walk.
     src.addEventListener('ended', () => {
+      this.sources.delete(src)
       src.disconnect(); bp.disconnect(); g.disconnect(); this.track(-3)
     }, { once: true })
   }
@@ -214,8 +240,10 @@ export class Piano {
     g.connect(this.wet)
     osc.start(t)
     osc.stop(end)
+    this.sources.add(osc)
     this.track(3)
     osc.addEventListener('ended', () => {
+      this.sources.delete(osc)
       osc.disconnect(); tone.disconnect(); g.disconnect(); this.track(-3)
     }, { once: true })
 
