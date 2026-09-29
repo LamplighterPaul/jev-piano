@@ -73,6 +73,10 @@ export class Piano {
   /** Everything built and not yet ended, so stopping can silence it. */
   private sources = new Set<AudioScheduledSourceNode>()
 
+  /** The level the piano plays at, kept here because reading the gain back
+   *  mid-fade reports the fade, not the level. */
+  private level = 0.34
+
   private liveNodes = 0
   private notesPlayed = 0
   private notesDropped = 0
@@ -81,7 +85,7 @@ export class Piano {
   constructor(ctx: AudioContext) {
     this.ctx = ctx
     this.out = ctx.createGain()
-    this.out.gain.value = 0.34
+    this.out.gain.value = this.level
 
     // A chord is several notes at once, so the bus has to survive more than
     // one note's worth of signal. Gentle compression for glue, then a hard
@@ -113,21 +117,24 @@ export class Piano {
     comp.connect(limiter).connect(this.out).connect(ctx.destination)
   }
 
-  set volume(v: number) { this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05) }
+  set volume(v: number) { this.level = v; this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05) }
 
   /** Lift the hands and damp every string, without closing the context.
    *  Closing it and building a new one, convolver and all, is what made
-   *  pressing play block for the best part of a second. */
+   *  pressing play block for the best part of a second. The piano stays
+   *  silent, room and all, until `wake` says the next piece is starting. */
   hush() {
     const now = this.ctx.currentTime
-    const level = this.out.gain.value
     this.out.gain.cancelScheduledValues(now)
-    this.out.gain.setValueAtTime(level, now)
+    this.out.gain.setValueAtTime(this.out.gain.value, now)
     this.out.gain.linearRampToValueAtTime(0, now + 0.08)
     for (const src of this.sources) { try { src.stop(now + 0.1) } catch { /* already stopped */ } }
     this.ringing = []
-    // Back up once the damped notes are gone, ready for the next piece.
-    this.out.gain.setValueAtTime(level, now + 0.25)
+  }
+
+  /** Back to playing level just before `at`, when the next piece begins. */
+  wake(at: number) {
+    this.out.gain.setValueAtTime(this.level, Math.max(this.ctx.currentTime, at - 0.02))
   }
 
   /** How many notes are sounding, and how much graph is alive. */

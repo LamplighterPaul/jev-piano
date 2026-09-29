@@ -134,6 +134,7 @@ export class Player {
     const beat = 60 / piece.bpm
     const ctxNow = () => this.ctx?.currentTime ?? 0
     this.nextStart = ctxNow() + 0.35
+    this.piano?.wake(this.nextStart)
 
     const context: Context = { index: 0, progression: [], barsPlayed: 0, seed }
 
