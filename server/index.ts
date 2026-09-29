@@ -1,13 +1,14 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
 import {
-  MAX_BRIEF, USD_PER_TOKEN, assembleHarmony, assembleMelody, assemblePiece,
+  BARS_PER_PHRASE, MAX_BRIEF, MAX_PHRASES, USD_PER_TOKEN, assembleHarmony, assembleMelody, assemblePiece,
   buildHarmonyQuestions, buildMelodyQuestions, buildPieceQuestions, phraseState,
   type Context, type Piece, type Stats,
 } from '../shared/harness.ts'
-import { FIGURES, PHRASE_FUNCTIONS } from '../shared/catalog.ts'
-import { CHORD_BY_LABEL, chordLabel } from '../shared/theory.ts'
+import { FIGURES, METERS, PHRASE_FUNCTIONS, TEMPO_BPM } from '../shared/catalog.ts'
+import { CHORD_BY_LABEL, MODES, chordLabel } from '../shared/theory.ts'
 import { ask, keyCount, live } from './jev.ts'
 
 const app = new Hono()
@@ -33,6 +34,33 @@ const statsOf = (run: { model: string; ms: number; questions: number; inputToken
 }
 
 const fail = (e: unknown) => ({ error: e instanceof Error ? e.message : 'Something went wrong' })
+
+// The piece travels through the browser between calls, and its brief goes to
+// Jev as part of every phrase. Only /api/piece asks whether a brief is safe to
+// play, so the piece comes back signed and a phrase is only made for a piece
+// this server settled. Without PIECE_SECRET a key is made up at start, which
+// is fine for one process: a restart only ends the pieces already playing.
+const SECRET = process.env.PIECE_SECRET || randomBytes(32).toString('hex')
+
+const canonical = (p: Piece) => JSON.stringify([p.brief, p.tonic, p.mode, p.meter, p.beats, p.bpm])
+const sign = (p: Piece) => createHmac('sha256', SECRET).update(canonical(p)).digest('base64url')
+
+function signed(p: unknown, sig: unknown): Piece | undefined {
+  if (!p || typeof p !== 'object' || typeof sig !== 'string') return undefined
+  const q = p as Piece
+  // Checked against the catalog as well as the signature, so a piece that is
+  // somehow malformed fails as a 400 here rather than as a 500 further in.
+  if (typeof q.brief !== 'string' || !q.brief || q.brief.length > MAX_BRIEF) return undefined
+  if (!Number.isInteger(q.tonic) || q.tonic < 0 || q.tonic > 11) return undefined
+  if (!(q.mode in MODES) || !(q.meter in METERS) || q.beats !== METERS[q.meter]) return undefined
+  if (!TEMPO_BPM.includes(q.bpm)) return undefined
+  const piece: Piece = { brief: q.brief, tonic: q.tonic, mode: q.mode, meter: q.meter, beats: q.beats, bpm: q.bpm }
+  const want = Buffer.from(sign(piece))
+  const got = Buffer.from(sig)
+  return want.length === got.length && timingSafeEqual(want, got) ? piece : undefined
+}
+
+const count = (n: unknown, max: number) => Math.min(max, Math.max(0, Math.trunc(Number(n) || 0)))
 
 // A public endpoint that spends money needs a lid on it. Counted per minute per
 // address, in memory; no address is stored beyond the current minute.
@@ -63,7 +91,7 @@ app.post('/api/piece', async c => {
     if (!text) return c.json({ error: 'Describe something for Jev to play.' }, 400)
     const run = await ask({ brief: text }, buildPieceQuestions())
     const { piece, decisions, refuse } = assemblePiece(text, run.answers, Number(seed) || 0)
-    return c.json({ piece, decisions, refuse, stats: statsOf(run) })
+    return c.json({ piece, sig: refuse ? undefined : sign(piece), decisions, refuse, stats: statsOf(run) })
   } catch (e) { return c.json(fail(e), 500) }
 })
 
@@ -71,21 +99,23 @@ app.post('/api/phrase', async c => {
   try {
     if (!withinRate(c)) return c.json({ error: 'Too many requests in a minute. Give it a moment.' }, 429)
     budget()
-    const { piece, context } = await c.req.json<{ piece: Piece; context: Context }>()
-    if (!piece?.brief) return c.json({ error: 'No piece in progress.' }, 400)
+    const body = await c.req.json<{ piece: Piece; sig: string; context: Context }>()
+    const piece = signed(body.piece, body.sig)
+    if (!piece) return c.json({ error: 'That piece is no longer in progress. Press play to start again.' }, 400)
+    const context = body.context
     // Everything here reaches Jev as the text of a prompt, and the client can
     // say anything, so each field is checked against the catalog it came from.
     const ctx: Context = {
-      index: Math.max(0, context?.index ?? 0),
+      index: count(context?.index, MAX_PHRASES),
       progression: Array.isArray(context?.progression)
         ? context.progression.filter(label => typeof label === 'string' && label in CHORD_BY_LABEL).slice(-12)
         : [],
       motif: FIGURES.some(f => f.id === context?.motif) ? context.motif : undefined,
-      barsPlayed: Math.max(0, context?.barsPlayed ?? 0),
+      barsPlayed: count(context?.barsPlayed, MAX_PHRASES * BARS_PER_PHRASE),
       // Without the seed, sampled() falls back to Jev's argmax for every
       // chord, figure, hand, landing note, dynamic and register, so a piece
       // never varies once the key is chosen.
-      seed: Math.max(0, Math.trunc(Number(context?.seed) || 0)),
+      seed: count(context?.seed, Number.MAX_SAFE_INTEGER),
       // Without the role, every phrase is told it is the opening, so nothing
       // plans ahead and the harmony settles onto the tonic and stays there.
       role: typeof context?.role === 'string' && context.role in PHRASE_FUNCTIONS

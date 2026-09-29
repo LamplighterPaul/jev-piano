@@ -72,12 +72,14 @@ export class Player {
     this.piano = new Piano(ctx)
 
     let piece: Piece
+    let sig: string
     try {
-      const res = await post<{ piece: Piece; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
+      const res = await post<{ piece: Piece; sig: string; decisions: Decision[]; stats: Stats; refuse?: string; error?: string }>('/api/piece', { brief, seed })
       if (res.error) return this.fail(res.error)
       if (res.refuse) return this.fail(res.refuse)
       if (!current()) return
       piece = res.piece
+      sig = res.sig
       this.hooks.onPiece(piece, res.decisions, res.stats)
     } catch (e) {
       return this.fail(e instanceof Error ? e.message : 'Could not reach Jev.')
@@ -92,7 +94,7 @@ export class Player {
     while (current()) {
       let played: Played
       try {
-        const res = await post<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>('/api/phrase', { piece, context })
+        const res = await post<{ phrase: PhraseSpec; decisions: Decision[]; stats: Stats; error?: string }>('/api/phrase', { piece, sig, context })
         if (res.error) return this.fail(res.error)
         played = { ...res, index: context.index, barOffset: context.barsPlayed }
       } catch (e) {
